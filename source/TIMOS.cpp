@@ -224,10 +224,21 @@ inline bool operator < (TSimpleTri a, TSimpleTri b){
   }
 }
 
+// Skip whitespace then any number of '#'-to-end-of-line comment lines.
+// Call before every logical token read in the three file parsers.
+static inline void skip_comments(std::istream& fin) {
+  fin >> std::ws;
+  while(fin.good() && fin.peek() == '#') {
+    std::string line;
+    std::getline(fin, line);
+    fin >> std::ws;
+  }
+}
+
 // +++++++++++++++++++++++++++++++++++++++++++++++++++
 //
 // Read finite element mesh from file
-// 
+//
 // +++++++++++++++++++++++++++++++++++++++++++++++++++
 int fem_read(char      *  filename,
 	     bool         simpleOptic,
@@ -256,26 +267,13 @@ int fem_read(char      *  filename,
 
   // Read the finite element mesh data.
 
-  char tempChar;
   long long int curLine = 1;
 
-  // Ignore the comments in the data file
-  do{
-    fin >> tempChar;
-    curLine++;
-
-    if(tempChar=='#'){
-      string line;
-      getline(fin, line);
-    }
-  }while(tempChar == '#');
-  fin.putback(tempChar);
-  //--------------------------------------
-
-
+  skip_comments(fin);
   fin >> numNode;
   if(fin.fail()){cerr <<"Error in fem file at line " << curLine <<endl;}
 
+  skip_comments(fin);
   fin >> numElem;
   curLine++;
   if(fin.fail()){cerr <<"Error in fem file at line " << curLine <<endl;}
@@ -308,14 +306,16 @@ int fem_read(char      *  filename,
 
 
   for (int i=1; i<=numNode; i++){
+    skip_comments(fin);
     fin >> nodes[i].X;
     fin >> nodes[i].Y;
     fin >> nodes[i].Z;
     curLine++;
     if(fin.fail()){cerr <<"Error in fem file at line " << curLine <<endl;}
   }
-  
+
   for (int i=1; i<=numElem; i++){
+    skip_comments(fin);
     fin >> elemNodes[i].N[0];
     fin >> elemNodes[i].N[1];
     fin >> elemNodes[i].N[2];
@@ -636,7 +636,8 @@ int ReadOpticalParameter(char       * filename,
   }
 
   int type;
-   
+
+  skip_comments(fin);
   fin >> type;
   if (type == 1){
     cerr << "\tOptical parameter per region " << endl;
@@ -646,11 +647,13 @@ int ReadOpticalParameter(char       * filename,
     simpleOptic = false;
   }
 
+  skip_comments(fin);
   fin >> numMed;
 
   medOptic = new TMedOptic [numMed+1];
 
   for (int i=1; i<=numMed; i++){
+    skip_comments(fin);
     fin >> medOptic[i].mua;
     fin >> medOptic[i].mus;
     fin >> medOptic[i].g;
@@ -689,10 +692,12 @@ int ReadOpticalParameter(char       * filename,
   }  
   
   // read the last optical parameter: refractive index of environment.
+  skip_comments(fin);
   fin >> type;
   if(type==1){
     cerr << "\tThe environment has a uniform refractive index." << endl;
     uniformBoundary = 0;
+    skip_comments(fin);
     fin >> envRefIdx;
   }else if(type==2){
     cerr << "\tThe environment matches the phantom, hence, no reflection on boundary." << endl; 
@@ -899,6 +904,7 @@ long long int ReadSource(char     * filename,
 
   int curLine = 0;
 
+  skip_comments(fin);
   fin >> numSource;
   curLine++;
   if(fin.fail()){cerr <<"Error in source file at line " << curLine <<endl;}
@@ -909,6 +915,7 @@ long long int ReadSource(char     * filename,
 
   for (int i=0; i<numSource; i++){
     curLine++;
+    skip_comments(fin);
     fin >> sources[i].SourceType;
     switch(sources[i].SourceType){
     case 1:
@@ -947,6 +954,7 @@ long long int ReadSource(char     * filename,
       continue;
     }
 
+    skip_comments(fin);
     fin >> sources[i].NumPhoton;
 
     l_totalPhoton += sources[i].NumPhoton;
