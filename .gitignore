@@ -1,0 +1,16 @@
+# Compiled binary
+source/timos
+
+# macOS
+.DS_Store
+
+# Editor backups
+*~
+*.~
+
+# Result files (generated output)
+example/**/*.dat
+example/**/result*.dat
+
+# Claude internal
+.claude/
