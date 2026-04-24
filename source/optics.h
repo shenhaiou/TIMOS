@@ -2,4 +2,4 @@
 #include "simcontext.h"
 #include <string>
 
-int ReadOpticalParameter(const std::string& filename, SimContext& ctx);
+TiResult ReadOpticalParameter(const std::string& filename, SimContext& ctx);

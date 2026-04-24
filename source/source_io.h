@@ -2,6 +2,7 @@
 #include "simcontext.h"
 #include <string>
 
-long long int ReadSource(const std::string& filename, SimContext& ctx);
+// Returns total photon count on success, or an error message.
+std::expected<long long int, std::string> ReadSource(const std::string& filename, SimContext& ctx);
 
-int Prepare_Source(SimContext& ctx);
+TiResult Prepare_Source(SimContext& ctx);

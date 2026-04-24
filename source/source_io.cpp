@@ -7,10 +7,10 @@
 
 using namespace std;
 
-long long int ReadSource(const std::string& filename, SimContext& ctx){
+std::expected<long long int, std::string> ReadSource(const std::string& filename, SimContext& ctx){
   long long int total = 0;
   ifstream fin(filename);
-  if(!fin.good()){ cerr<<"\tCould not open file: "<<filename<<"\n"; return -1; }
+  if(!fin.good()){ cerr<<"\tCould not open file: "<<filename<<"\n"; return std::unexpected("error"); }
 
   int curLine = 0;
   skip_comments(fin); fin >> ctx.numSource; curLine++;
@@ -37,7 +37,7 @@ long long int ReadSource(const std::string& filename, SimContext& ctx){
       fin >> ctx.sources[i].SurfTriNodes[0] >> ctx.sources[i].SurfTriNodes[1] >> ctx.sources[i].SurfTriNodes[2];
       break;
     default:
-      cerr<<"\tUnknown source type near line: "<<i+1<<"\n"; return -1;
+      cerr<<"\tUnknown source type near line: "<<i+1<<"\n"; return std::unexpected("error");
     }
     skip_comments(fin); fin >> ctx.sources[i].NumPhoton;
     total += ctx.sources[i].NumPhoton;
@@ -45,7 +45,7 @@ long long int ReadSource(const std::string& filename, SimContext& ctx){
   return total;
 }
 
-int Prepare_Source(SimContext& ctx){
+TiResult Prepare_Source(SimContext& ctx){
   cerr << "Begin check source\n";
 
   int* nodeTriStart = new int[ctx.numNode+1]();
@@ -97,7 +97,7 @@ int Prepare_Source(SimContext& ctx){
       }
       if(ctx.sources[i].ElemIdx <= 0){
         cerr<<"\tSource "<<i+1<<" not within phantom.\n";
-        delete[] nodeTriStart; return -1;
+        delete[] nodeTriStart; return std::unexpected("error");
       }
 
     }else if(ctx.sources[i].SourceType == 12){
@@ -111,8 +111,8 @@ int Prepare_Source(SimContext& ctx){
       for(int j=nodeTriStart[s0]; j<nodeTriStart[s0+1]; j++)
         if(ctx.sources[i].SurfTriNodes[1]==ctx.triNodes[j].N[1] &&
            ctx.sources[i].SurfTriNodes[2]==ctx.triNodes[j].N[2]){ tIdx=j; break; }
-      if(tIdx==-1){ cerr<<"\tWrong source 1\n"; delete[] nodeTriStart; return -1; }
-      if(ctx.triangles[tIdx].Num_Elem==2){ cerr<<"\tWrong source 2\n"; delete[] nodeTriStart; return -1; }
+      if(tIdx==-1){ cerr<<"\tWrong source 1\n"; delete[] nodeTriStart; return std::unexpected("error"); }
+      if(ctx.triangles[tIdx].Num_Elem==2){ cerr<<"\tWrong source 2\n"; delete[] nodeTriStart; return std::unexpected("error"); }
 
       ctx.sources[i].SurfTriIdx = tIdx;
       int e = ctx.sources[i].ElemIdx = ctx.triangles[tIdx].ElemIdx[0];
@@ -131,5 +131,5 @@ int Prepare_Source(SimContext& ctx){
   }
   cerr << "End check source\n";
   delete[] nodeTriStart;
-  return 0;
+  return {};
 }

@@ -103,24 +103,34 @@ int main(int argc, char* argv[]){
       <<"Fem data filename: "<<fem_f<<"\n"
       <<"Source   filename: "<<src_f<<"\n";
 
+  // Lambda: report error and return -1 if TiResult holds an error
+  auto check = [](TiResult r, const char* step) -> bool {
+    if(!r){ cerr << "Error in " << step << ": " << r.error() << "\n"; return false; }
+    return true;
+  };
+
   cerr<<"Begin read optical parameters.\n";
-  if(ReadOpticalParameter(opt_f,ctx)<0) return -1;
+  if(!check(ReadOpticalParameter(opt_f,ctx),"ReadOpticalParameter")) return -1;
   cerr<<"End read optical parameters.\n";
 
   cerr<<"Begin read finite element file.\n";
-  if(fem_read(fem_f,ctx)<0) return -1;
+  if(!check(fem_read(fem_f,ctx),"fem_read")) return -1;
   cerr<<"End read finite element file.\n";
 
   cerr<<"Begin Preprocessing the finite element mesh.\n";
-  if(PreProcessor(ctx)<0) return -1;
+  if(!check(PreProcessor(ctx),"PreProcessor")) return -1;
   cerr<<"End Preprocessing the finite element mesh.\n";
 
   cerr<<"Begin read source file.\n";
-  ctx.totalPhoton=ReadSource(src_f,ctx);
+  {
+    auto src_result = ReadSource(src_f, ctx);
+    if(!src_result){ cerr<<"Error reading source: "<<src_result.error()<<"\n"; return -1; }
+    ctx.totalPhoton = *src_result;
+  }
   cerr<<"End read source file.\n";
-  if(ctx.totalPhoton<=0) return -1;
+  if(ctx.totalPhoton<=0){ cerr<<"No photons in source file.\n"; return -1; }
 
-  if(Prepare_Source(ctx)<0) return -1;
+  if(!check(Prepare_Source(ctx),"Prepare_Source")) return -1;
 
   cerr<<"       Num Photon: "<<ctx.totalPhoton<<"\n";
   if(ctx.timeDomain)
@@ -162,8 +172,10 @@ int main(int argc, char* argv[]){
   else               AbsorptionToFluence    (ctx,sufTh,intTh);
 
   cerr<<"Write output file\n";
-  if(ctx.timeDomain) TimeWriteResultASCII(opt_f,fem_f,src_f,out_f,ctx,sufTh,intTh,fmt);
-  else               WriteResultASCII    (opt_f,fem_f,src_f,out_f,ctx,sufTh,intTh,fmt);
+  TiResult wr = ctx.timeDomain
+    ? TimeWriteResultASCII(opt_f,fem_f,src_f,out_f,ctx,sufTh,intTh,fmt)
+    :      WriteResultASCII(opt_f,fem_f,src_f,out_f,ctx,sufTh,intTh,fmt);
+  if(!wr){ cerr<<"Write failed: "<<wr.error()<<"\n"; return -1; }
 
   cerr<<"Done\n------------------------------------------------\n";
   // ctx destructor frees all heap arrays

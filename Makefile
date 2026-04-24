@@ -9,7 +9,7 @@ SRCS = source/mesh.cpp \
        source/main.cpp
 
 # Base flags for M1 Max
-CXXFLAGS  = -O3 -std=c++20 -march=native -ffast-math -funroll-loops
+CXXFLAGS  = -O3 -std=c++23 -march=native -ffast-math -funroll-loops
 CXXFLAGS += -DHAS_ACCELERATE -framework Accelerate
 CXXFLAGS += -Isource
 

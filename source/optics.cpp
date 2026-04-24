@@ -5,9 +5,9 @@
 
 using namespace std;
 
-int ReadOpticalParameter(const std::string& filename, SimContext& ctx){
+TiResult ReadOpticalParameter(const std::string& filename, SimContext& ctx){
   ifstream fin(filename);
-  if(!fin.good()){ cerr << "\tCould not open file: " << filename << "\n"; return -1; }
+  if(!fin.good()){ cerr << "\tCould not open file: " << filename << "\n"; return std::unexpected("error"); }
 
   int type;
   skip_comments(fin); fin >> type;
@@ -23,16 +23,16 @@ int ReadOpticalParameter(const std::string& filename, SimContext& ctx){
         >> ctx.medOptic[i].g   >> ctx.medOptic[i].RefIdx;
 
     if(ctx.medOptic[i].mua<0 || ctx.medOptic[i].mus<0){
-      cerr<<"\tmua and mus must be >= 0.\n"; return -1;
+      cerr<<"\tmua and mus must be >= 0.\n"; return std::unexpected("error");
     }
     if(ctx.medOptic[i].g<0 || ctx.medOptic[i].g>1){
-      cerr<<"\tg must be in [0,1].\n"; return -1;
+      cerr<<"\tg must be in [0,1].\n"; return std::unexpected("error");
     }
     if(ctx.medOptic[i].RefIdx<1){
-      cerr<<"\tRefractive index must be >= 1.\n"; return -1;
+      cerr<<"\tRefractive index must be >= 1.\n"; return std::unexpected("error");
     }
     if(ctx.medOptic[i].mua<1e-10 && ctx.medOptic[i].mus<1e-10){
-      cerr<<"\tmua and mus cannot both be zero.\n"; return -1;
+      cerr<<"\tmua and mus cannot both be zero.\n"; return std::unexpected("error");
     }
     double g = ctx.medOptic[i].g;
     ctx.medOptic[i].OneMinsGG = 1.0-g*g;
@@ -54,5 +54,5 @@ int ReadOpticalParameter(const std::string& filename, SimContext& ctx){
     cerr<<"\tMatched boundary (no reflection).\n";
     ctx.uniformBoundary = 1;
   }
-  return 0;
+  return {};
 }

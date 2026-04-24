@@ -5,8 +5,13 @@
 
 #include "timos.h"
 #include "constants.h"
+#include <expected>
 #include <vector>
 #include <string>
+
+// Canonical result type for I/O functions: success = std::expected<void,std::string>{}
+// Failure = std::unexpected("human-readable message").
+using TiResult = std::expected<void, std::string>;
 
 struct SimContext {
   // ------- Time-domain settings -------

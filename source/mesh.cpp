@@ -14,9 +14,9 @@ static inline bool operator<(TSimpleTri a, TSimpleTri b){
       || (a.N[0] == b.N[0] && a.N[1] == b.N[1] && a.N[2] < b.N[2]);
 }
 
-int fem_read(const std::string& filename, SimContext& ctx){
+TiResult fem_read(const std::string& filename, SimContext& ctx){
   ifstream fin(filename);
-  if(!fin.good()){ cerr << "\tCould not open file: " << filename << "\n"; return -1; }
+  if(!fin.good()){ cerr << "\tCould not open file: " << filename << "\n"; return std::unexpected("fem error"); }
 
   long long int curLine = 1;
   skip_comments(fin); fin >> ctx.numNode;
@@ -27,7 +27,7 @@ int fem_read(const std::string& filename, SimContext& ctx){
 
   if(!ctx.simpleOptic && ctx.numMed != ctx.numElem){
     cerr << "Error: numMed must equal numElem for per-element optics.\n";
-    return -1;
+    return std::unexpected("fem error");
   }
   cerr << "\tNum Node: " << ctx.numNode << "\n\tNum Elem: " << ctx.numElem << "\n";
 
@@ -53,7 +53,7 @@ int fem_read(const std::string& filename, SimContext& ctx){
     for(int k = 0; k < 4; k++)
       if(ctx.elemNodes[i].N[k] < 1 || ctx.elemNodes[i].N[k] > ctx.numNode){
         cerr << "\tNode index out of range at line " << curLine << "\n";
-        return -1;
+        return std::unexpected("fem error");
       }
     curLine++;
     if(fin.fail()) cerr << "Error at line " << curLine << "\n";
@@ -62,7 +62,7 @@ int fem_read(const std::string& filename, SimContext& ctx){
       if(ctx.elems[i].MedIdx > ctx.numMed){
         cerr << "\tFEM references medium " << ctx.elems[i].MedIdx
              << " but only " << ctx.numMed << " defined.\n";
-        return -1;
+        return std::unexpected("fem error");
       }
     }else{
       ctx.elems[i].MedIdx = i;
@@ -76,10 +76,10 @@ int fem_read(const std::string& filename, SimContext& ctx){
         if(ctx.elemNodes[i].N[j] > ctx.elemNodes[i].N[k])
           std::swap(ctx.elemNodes[i].N[j], ctx.elemNodes[i].N[k]);
   }
-  return 0;
+  return {};
 }
 
-int PreProcessor(SimContext& ctx){
+TiResult PreProcessor(SimContext& ctx){
   int numElem = ctx.numElem, numNode = ctx.numNode;
 
   TSimpleTri* tl = new TSimpleTri[4*numElem+1];
@@ -136,7 +136,7 @@ int PreProcessor(SimContext& ctx){
     }
     for(int i = 0; i < ctx.triangles[L].Num_Elem; i++){
       if(ctx.triangles[L].ElemIdx[i]<1 || ctx.triangles[L].ElemIdx[i]>numElem){
-        cerr << "\tMesh not correct.\n"; delete[] tl; return -1;
+        cerr << "\tMesh not correct.\n"; delete[] tl; return std::unexpected("fem error");
       }
       for(int j = 0; j <= 3; j++)
         if(ctx.elemNodes[ctx.triangles[L].ElemIdx[i]].T[j] == -1){
@@ -186,5 +186,5 @@ int PreProcessor(SimContext& ctx){
 
   cerr << "End Mesh prepare\n";
   delete[] tl;
-  return 0;
+  return {};
 }

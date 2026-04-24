@@ -59,12 +59,12 @@ void TimeAbsorptionToFluence(SimContext& ctx,
   delete[] CAbs;
 }
 
-bool WriteResultASCII(const std::string& opt_f,const std::string& fem_f,
+TiResult WriteResultASCII(const std::string& opt_f,const std::string& fem_f,
                       const std::string& src_f,const std::string& out_f,
                       SimContext& ctx, double sufTh, double intTh, int fmt){
   const std::string fb="/tmp/timos_tmp_result.dat";
   ofstream fout(out_f);
-  if(!fout.good()){ cerr<<"Cannot write to "<<out_f<<"; using "<<fb<<"\n"; fout.open(fb); if(!fout.good()) return false; }
+  if(!fout.good()){ cerr<<"Cannot write to "<<out_f<<"; using "<<fb<<"\n"; fout.open(fb); if(!fout.good()) return std::unexpected("cannot open output file"); }
   fout<<"% Optical filename:    "<<opt_f<<"\n"
       <<"% Fem mesh filename:   "<<fem_f<<"\n"
       <<"% Source filename:     "<<src_f<<"\n"
@@ -90,15 +90,15 @@ bool WriteResultASCII(const std::string& opt_f,const std::string& fem_f,
           <<(ctx.absorption[i]<intTh?0.0:ctx.absorption[i])<<"\n";
     }
   }
-  return true;
+  return {};
 }
 
-bool TimeWriteResultASCII(const std::string& opt_f,const std::string& fem_f,
+TiResult TimeWriteResultASCII(const std::string& opt_f,const std::string& fem_f,
                           const std::string& src_f,const std::string& out_f,
                           SimContext& ctx, double sufTh, double intTh, int fmt){
   const std::string fb="/tmp/timos_tmp_result.dat";
   ofstream fout(out_f);
-  if(!fout.good()){ cerr<<"Cannot write to "<<out_f<<"; using "<<fb<<"\n"; fout.open(fb); if(!fout.good()) return false; }
+  if(!fout.good()){ cerr<<"Cannot write to "<<out_f<<"; using "<<fb<<"\n"; fout.open(fb); if(!fout.good()) return std::unexpected("cannot open output file"); }
   fout<<"% Optical filename:    "<<opt_f<<"\n"
       <<"% Fem mesh filename:   "<<fem_f<<"\n"
       <<"% Source filename:     "<<src_f<<"\n"
@@ -127,5 +127,5 @@ bool TimeWriteResultASCII(const std::string& opt_f,const std::string& fem_f,
       fout<<"\n";
     }
   }
-  return true;
+  return {};
 }
