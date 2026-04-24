@@ -6,26 +6,28 @@
 // 2011
 //----------------------------------------------------
 
-// To compile on macOS (M1):
-// clang++ -O3 -std=c++17 -march=native -ffast-math -funroll-loops -flto \
-//         -DHAS_ACCELERATE -framework Accelerate -o timos TIMOS.cpp
+// To compile on macOS (M1):  make  or  make pgo
+// Requires: clang++ with C++20, Apple Accelerate framework
 
 #define _REENTRANT
 #if defined(__ARM_NEON) || defined(__ARM_NEON__)
 #  include <arm_neon.h>
 #  define TIMOS_NEON 1
 #endif
-#include <time.h>
+#include <ctime>
 #include <iostream>
 #include <fstream>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <pthread.h>
+#include <thread>
+#include <vector>
 
 #include <set>
-#include <deque>
 #include <algorithm>
+#include <filesystem>
+#include <string>
+#include <string_view>
 
 #include <sys/stat.h>
 #include <sys/time.h>
@@ -39,9 +41,31 @@
 
 using namespace std;
 
-// Batched RNG buffer sizes. Buffers are refilled on exhaustion.
-#define MAXRANDNUM  256
-#define MAXRANDNUM3 768
+// +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+// Named constants (replace all magic numbers)
+// +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+// Batch size for the init-direction RNG buffer (xyz triples)
+static constexpr int RNG_BUF_XYZ  = 256;
+static constexpr int RNG_BUF_XYZ3 = RNG_BUF_XYZ * 3;
+
+// Per-thread time-domain accumulation buffer size (entries before flush)
+static constexpr int TD_FLUSH_SIZE = 1024 * 1024;
+
+// Photon batch size fetched from the source queue per lock acquisition
+static constexpr int SOURCE_BATCH = 1000;
+
+// Note: floating-point constants use static const (not constexpr) because
+// -ffast-math disables IEEE float constexpr evaluation in clang.
+
+// Photon weight threshold below which Russian-roulette is applied
+static const double WEIGHT_THRESHOLD = 1e-5;
+// Survival probability and boost factor for Russian roulette
+static const double ROULETTE_SURVIVE = 0.1;
+static const double ROULETTE_BOOST   = 1.0 / ROULETTE_SURVIVE;
+
+// Sentinel "no intersection yet" distance (larger than any mesh dimension)
+static const double NO_INTERSECTION  = 1e10;
 
 // Fill buf[0..n) with uniform doubles in [lo, hi)
 static inline void rng_fill_uniform(timos::Xoshiro256ss& rng, double* buf, int n, double lo, double hi) {
@@ -188,13 +212,13 @@ TTriangle * g_Triangles;
 double    * g_SurfMeas;  
 // The surface fluence #photon/mm^2
 
-double   ** g_TimeSurfMeas;
+std::vector<std::vector<double>> g_TimeSurfMeas;
 // Time domain suface fluence
 
 double    * g_Absorption;   
 // g_Absorption: Internal fluence 
 
-double   ** g_TimeAbsorption;
+std::vector<std::vector<double>> g_TimeAbsorption;
 // Time domain internal fluence
 
 TSource   * g_Sources;
@@ -240,7 +264,7 @@ static inline void skip_comments(std::istream& fin) {
 // Read finite element mesh from file
 //
 // +++++++++++++++++++++++++++++++++++++++++++++++++++
-int fem_read(char      *  filename,
+int fem_read(const std::string& filename,
 	     bool         simpleOptic,
 	     int       &  numNode, 
 	     int       &  numElem,
@@ -622,7 +646,7 @@ int PreProcessor(int        & numElem,
 // ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 // read optical parameters from file
 // ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-int ReadOpticalParameter(char       * filename,
+int ReadOpticalParameter(const std::string& filename,
 			 bool       & simpleOptic,
 			 int        & numMed,
 			 int        & uniformBoundary,
@@ -748,7 +772,7 @@ int Prepare_Source(int        & numNode,
       // isotropic point source
       sources[i].ElemIdx = -1;
       for (int Cur_Elem=1; Cur_Elem<=numElem; Cur_Elem++){
-	double Min_H = 1000;
+	double Min_H = NO_INTERSECTION;
 	// SoA: face j = [j], [j+4], [j+8], [j+12]
 	height[0] = (elems[Cur_Elem].TriNorm[0]*sources[i].Position.X +
 		     elems[Cur_Elem].TriNorm[4]*sources[i].Position.Y +
@@ -890,7 +914,7 @@ int Prepare_Source(int        & numNode,
 // Read source setting from file
 // 
 // ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-long long int ReadSource(char     * filename,
+long long int ReadSource(const std::string& filename,
 			 int      & numSource,
 			 TSource *& sources){
 
@@ -983,7 +1007,7 @@ inline int Fetch_Source(TSource & ThreadSources, int & SourceIdx, int tid){
       ThreadSources.SurfTriNodes[1] = g_Sources[SourceIdx].SurfTriNodes[1];
       ThreadSources.SurfTriNodes[2] = g_Sources[SourceIdx].SurfTriNodes[2];
       ThreadSources.SurfTriIdx      = g_Sources[SourceIdx].SurfTriIdx;
-      num_fetched_photon = (g_Sources[SourceIdx].NumPhoton >= 1000)
+      num_fetched_photon = (g_Sources[SourceIdx].NumPhoton >= SOURCE_BATCH)
                            ? 1000 : g_Sources[SourceIdx].NumPhoton;
       ThreadSources.NumPhoton = num_fetched_photon;
       g_Sources[SourceIdx].NumPhoton -= num_fetched_photon;
@@ -1013,9 +1037,9 @@ int InitialPhoton_PointSource(TPhoton & Photon,
     Photon.UX = randnums_xyz[Idx_U++];
     Photon.UY = randnums_xyz[Idx_U++];
     Photon.UZ = randnums_xyz[Idx_U++];
-    if(Idx_U>=MAXRANDNUM3){
+    if(Idx_U>=RNG_BUF_XYZ3){
       Idx_U=0;
-      rng_fill_uniform(rng, randnums_xyz, MAXRANDNUM3+6, -1.0, 1.0);
+      rng_fill_uniform(rng, randnums_xyz, RNG_BUF_XYZ3+6, -1.0, 1.0);
     }
     temp = (Photon.UX * Photon.UX +
 	    Photon.UY * Photon.UY +
@@ -1044,9 +1068,9 @@ inline int InitialPhoton_RegionSource(TPhoton & Photon,
     wa = (randnums_xyz[Idx_U++]+1)/2.0;
     wb = (randnums_xyz[Idx_U++]+1)/2.0;
     wc = (randnums_xyz[Idx_U++]+1)/2.0;
-    if(Idx_U>=MAXRANDNUM3){
+    if(Idx_U>=RNG_BUF_XYZ3){
       Idx_U=0;
-      rng_fill_uniform(rng, randnums_xyz, MAXRANDNUM3+6, -1.0, 1.0);
+      rng_fill_uniform(rng, randnums_xyz, RNG_BUF_XYZ3+6, -1.0, 1.0);
     }
   }while((wa+wb+wc)>=1);
   wd = 1-wa-wb-wc;
@@ -1071,9 +1095,9 @@ inline int InitialPhoton_RegionSource(TPhoton & Photon,
     Photon.UX = randnums_xyz[Idx_U++];
     Photon.UY = randnums_xyz[Idx_U++];
     Photon.UZ = randnums_xyz[Idx_U++];
-    if(Idx_U>=MAXRANDNUM3){
+    if(Idx_U>=RNG_BUF_XYZ3){
       Idx_U=0;
-      rng_fill_uniform(rng, randnums_xyz, MAXRANDNUM3+6, -1.0, 1.0);
+      rng_fill_uniform(rng, randnums_xyz, RNG_BUF_XYZ3+6, -1.0, 1.0);
     }
     temp = (Photon.UX * Photon.UX +
 	    Photon.UY * Photon.UY +
@@ -1125,9 +1149,9 @@ inline int InitialPhoton_TriangleSource(TPhoton & Photon,
   double u, v, w;
   u = (randnums_xyz[Idx_U++]+1)/2.0;
   v = (randnums_xyz[Idx_U++]+1)/2.0;
-  if(Idx_U>=MAXRANDNUM3){
+  if(Idx_U>=RNG_BUF_XYZ3){
     Idx_U=0;
-    rng_fill_uniform(rng, randnums_xyz, MAXRANDNUM3+6, -1.0, 1.0);
+    rng_fill_uniform(rng, randnums_xyz, RNG_BUF_XYZ3+6, -1.0, 1.0);
   }
   if(u+v>1){
     u=1-u;
@@ -1199,7 +1223,7 @@ inline void PhotonTetrahedronIntersection(double  & MinPos,
   // Compute step t = -height / dot(N, U) for each of 4 triangle faces.
   // height = dot(N, P) + d   (signed distance from point to plane)
   // t is valid only when dot(N, U) < 0 (photon moving toward face).
-  MinPos     = 1e10;
+  MinPos     = NO_INTERSECTION;
   MinPos_Idx = -1;
 
 #ifdef TIMOS_NEON
@@ -1297,8 +1321,7 @@ void * ThreadPhotonPropagation(void * threadid){
   double * LocalSurfMeas   = new double[g_NumBoundaryTrig + 1]();
 
   // Time-domain still uses the batch PhotonInfo buffer (complex time-bin logic).
-  const int     Thread_ArraySize = 1024*1024;
-  TPhotonInfo * PhotonInfo = g_TimeDomain ? new TPhotonInfo[Thread_ArraySize+4] : nullptr;
+  TPhotonInfo * PhotonInfo = g_TimeDomain ? new TPhotonInfo[TD_FLUSH_SIZE+4] : nullptr;
   int           PhotonInfo_Idx = 0;
   if(g_TimeDomain) PhotonInfo[0].Idx = -1;
 
@@ -1307,7 +1330,7 @@ void * ThreadPhotonPropagation(void * threadid){
   // rng      — hot-path RngPool: uses Accelerate AES-CTR + vvlog/vvsincos
   // rng_init — cold-path Xoshiro256ss: used only for photon init direction sampling
   // ------------------------------------------------------------
-  double * randnums_xyz = new double [MAXRANDNUM3+6];
+  double * randnums_xyz = new double [RNG_BUF_XYZ3+6];
   int    Idx_U    = 0;
   int    Idx_uvw  = 0;
 
@@ -1319,7 +1342,7 @@ void * ThreadPhotonPropagation(void * threadid){
   timos::RngPool      rng(seed_a);
   timos::Xoshiro256ss rng_init(seed_b);
 
-  rng_fill_uniform(rng_init, randnums_xyz, MAXRANDNUM3+6, -1.0, 1.0);
+  rng_fill_uniform(rng_init, randnums_xyz, RNG_BUF_XYZ3+6, -1.0, 1.0);
 
   // ------------------------------------------------------------
   // declare variables for the propagation process
@@ -1555,7 +1578,7 @@ void * ThreadPhotonPropagation(void * threadid){
 	        PhotonInfo[PhotonInfo_Idx].Idx = Curr_Idx;
 	        PhotonInfo[PhotonInfo_Idx].LostWeight = Photon.Weight;
 	      }
-	      if(PhotonInfo_Idx >= Thread_ArraySize) SaveLocal2Global(PhotonInfo, PhotonInfo_Idx);
+	      if(PhotonInfo_Idx >= TD_FLUSH_SIZE) SaveLocal2Global(PhotonInfo, PhotonInfo_Idx);
 	    }else{
 	      LocalSurfMeas[-g_Elems[Photon.Cur_Elem].AdjElemIdx[MinPos_Idx]] += Photon.Weight;
 	    }
@@ -1631,7 +1654,7 @@ void * ThreadPhotonPropagation(void * threadid){
 		  PhotonInfo[PhotonInfo_Idx].Idx = Curr_Idx;
 		  PhotonInfo[PhotonInfo_Idx].LostWeight = Photon.Weight;
 		}
-		if(PhotonInfo_Idx >= Thread_ArraySize) SaveLocal2Global(PhotonInfo, PhotonInfo_Idx);
+		if(PhotonInfo_Idx >= TD_FLUSH_SIZE) SaveLocal2Global(PhotonInfo, PhotonInfo_Idx);
 	      }else{
 		LocalSurfMeas[-g_Elems[Photon.Cur_Elem].AdjElemIdx[MinPos_Idx]] += Photon.Weight;
 	      }
@@ -1687,7 +1710,7 @@ void * ThreadPhotonPropagation(void * threadid){
 	  PhotonInfo[PhotonInfo_Idx].Idx = Curr_Idx;
 	  PhotonInfo[PhotonInfo_Idx].LostWeight = temp;
 	}
-	if(PhotonInfo_Idx >= Thread_ArraySize) SaveLocal2Global(PhotonInfo, PhotonInfo_Idx);
+	if(PhotonInfo_Idx >= TD_FLUSH_SIZE) SaveLocal2Global(PhotonInfo, PhotonInfo_Idx);
       }else{
 	LocalAbsorption[Photon.Cur_Elem] += temp;
       }
@@ -1699,9 +1722,9 @@ void * ThreadPhotonPropagation(void * threadid){
       }
 #endif
 
-      if(Photon.Weight <= 0.00001){
-        if(rng.get_uniform() < 0.1){
-          Photon.Weight *= 10;
+      if(Photon.Weight <= WEIGHT_THRESHOLD){
+        if(rng.get_uniform() < ROULETTE_SURVIVE){
+          Photon.Weight *= ROULETTE_BOOST;
         }else{
           break;
         }
@@ -1807,8 +1830,8 @@ void TimeAbsorptionToFluence(int            numElem,
 			     int          * boundaryTrigs,
 			     TElem        * Elems,
 			     TElemNode    * ElemNodes,
-			     double      ** TimeSurfMeas,
-			     double      ** TimeAbsorption){
+			     std::vector<std::vector<double>>& TimeSurfMeas,
+			     std::vector<std::vector<double>>& TimeAbsorption){
 
   double * CAbs = new double [numElem+1];
   for (int i=0; i<=numElem; i++){
@@ -1857,10 +1880,10 @@ void TimeAbsorptionToFluence(int            numElem,
 }
 
 
-bool WriteResultASCII(char * optical_filename,
-		      char * fem_filename,
-		      char * source_filename,
-		      char * output_filename,
+bool WriteResultASCII(const std::string& optical_filename,
+			      		      const std::string& fem_filename,
+		      const std::string& source_filename,
+		      const std::string& output_filename,
 		      long long int  TotalPhoton,
 		      int            NumThread,
 		      int            StartRandIdx,
@@ -1876,22 +1899,15 @@ bool WriteResultASCII(char * optical_filename,
 		      double       * Absorption,
 		      int            output_format){
   
-  ofstream fout;
-  
-  fout.open(output_filename, ofstream::out);
+  const std::string fallback = "/tmp/timos_tmp_result.dat";
+  ofstream fout(output_filename);
   if(!fout.good()){
-    cerr << "Could not write to output_filename." << endl;
-    cerr << "Please check the write permission in this folder" << endl;
-    output_filename = "/tmp/timos_tmp_result.dat";
-    fout.open(output_filename, ofstream::out);
-    if(fout.good()){
-      cerr << "Current result will be write to: /tmp/timos_tmp_result.dat" << endl;
-    }else{
-      return false;
-    }
+    cerr << "Could not write to " << output_filename
+         << ". Falling back to " << fallback << endl;
+    fout.open(fallback);
+    if(!fout.good()) return false;
   }
 
- 
   fout <<   "% Optical filename:    " << optical_filename << endl;
   fout <<   "% Fem mesh filename:   " << fem_filename << endl;
   fout <<   "% Source filename:     " << source_filename << endl;
@@ -1941,10 +1957,10 @@ bool WriteResultASCII(char * optical_filename,
   return true;
 }
 
-bool TimeWriteResultASCII(char *         optical_filename,
-			  char *         fem_filename,
-			  char *         source_filename,
-			  char *         output_filename,
+bool TimeWriteResultASCII(const std::string& optical_filename,
+			  			  const std::string& fem_filename,
+			  const std::string& source_filename,
+			  const std::string& output_filename,
 			  int            NumTimeStep,
 			  double         TimeStep,
 			  long long int  TotalPhoton,
@@ -1958,23 +1974,17 @@ bool TimeWriteResultASCII(char *         optical_filename,
 			  int          * boundaryTrigs,
 			  TElem        * Elems,
 			  TElemNode    * ElemNodes,
-			  double      ** TimeSurfMeas,
-			  double      ** TimeAbsorption,
+			  std::vector<std::vector<double>>& TimeSurfMeas,
+			  std::vector<std::vector<double>>& TimeAbsorption,
 			  int            output_format){
   
-  ofstream fout;
-  
-  fout.open(output_filename, ofstream::out);
+  const std::string fallback = "/tmp/timos_tmp_result.dat";
+  ofstream fout(output_filename);
   if(!fout.good()){
-    cerr << "Could not write to output_filename." << endl;
-    cerr << "Please check the write permission in this folder" << endl;
-    output_filename = "/tmp/timos_tmp_result.dat";
-    fout.open(output_filename, ofstream::out);
-    if(fout.good()){
-      cerr << "Current result will be write to: /tmp/timos_tmp_result.dat" << endl;
-    }else{
-      return false;
-    }
+    cerr << "Could not write to " << output_filename
+         << ". Falling back to " << fallback << endl;
+    fout.open(fallback);
+    if(!fout.good()) return false;
   }
 
   fout <<   "% Optical filename:    " << optical_filename << endl;
@@ -2054,218 +2064,130 @@ void print_usage(void){
   return;
 }
 
-int check_filename(char * filename, int MAX_Length){
-  struct stat f_stat;
-  int         f_stat_ret;
-
-  if(strlen(filename)>=MAX_Length){
-    cerr << "The maximum length of a filename allowed in this program is: " <<   MAX_Length << "." << endl;
-    return -1;
+// Check that path exists and is a regular file. Returns false and prints error on failure.
+static bool check_input_file(const std::string& path) {
+  std::error_code ec;
+  if(!std::filesystem::exists(path, ec) || ec){
+    cerr << "No such file: " << path << endl;
+    return false;
   }
-  // check whether the file is exist or not
-  f_stat_ret = stat(filename, &f_stat);
-  if(f_stat_ret==0){
-    // check whether it is readable or is it a folder.
-    if(f_stat.st_mode == S_IFDIR){
-      cerr << "Not a regular file: " << filename << endl;
-      return -1;
-    }
-  }else{
-    cerr << "No such file: " << filename << endl;
-    return -1;
+  if(!std::filesystem::is_regular_file(path, ec) || ec){
+    cerr << "Not a regular file: " << path << endl;
+    return false;
   }
-  return 0;
+  return true;
 }
 
-int check_argu(char * argu){
-  if(argu[0]=='-'){
+// Map a "-X" flag string to a small integer option code.
+static int check_argu(std::string_view argu){
+  if(argu.size() >= 2 && argu[0] == '-'){
     switch(argu[1]){
-    case 'p':
-      return 1;
-    case 'f':
-      return 2;
-    case 's':
-      return 3;
-    case 'm':
-      return 4;
-    case 'o':
-      return 5;
-    case 't':
-      return 6;
-    case 'r':
-      return 7;
-    case 'T':
-      return 8;
-    default:
-      return -1;
+    case 'p': return 1;
+    case 'f': return 2;
+    case 's': return 3;
+    case 'm': return 4;
+    case 'o': return 5;
+    case 't': return 6;
+    case 'r': return 7;
+    case 'T': return 8;
+    default:  return -1;
     }
   }
   return -1;
 }
 
-bool parse_argu(int argc, char * argv[], int & MAX_Length,
-		char   * optical_filename, 
-		char   * fem_filename,
-		char   * source_filename,
-		char   * output_filename,
-		int    & output_format,
-		int    & NumThread,
-		int    & StartRandIdx,
-		bool   & TimeDomain,
-		double & TimeStep,
-		double & InvTimeStep,
-		double & InvLightSpeedMutTimeStep,
-		int    & NumTimeStep){
-  int  file_status;
-  int  argu_idx = 1;
+bool parse_argu(int argc, char* argv[],
+                std::string& optical_filename,
+                std::string& fem_filename,
+                std::string& source_filename,
+                std::string& output_filename,
+                int&    output_format,
+                int&    NumThread,
+                int&    StartRandIdx,
+                bool&   TimeDomain,
+                double& TimeStep,
+                double& InvTimeStep,
+                double& InvLightSpeedMutTimeStep,
+                int&    NumTimeStep){
+  int argu_idx = 1;
 
-  bool HasOptFile = false;
-  bool HasFEMFile = false;
-  bool HasSouFile = false;
-  bool HasOutFile = false;
-  bool HasFormat  = false;
-  bool HasThread  = false;
-  bool HasStartRd = false;
+  bool HasOptFile = false, HasFEMFile = false;
+  bool HasSouFile = false, HasOutFile = false;
+  bool HasFormat  = false, HasThread  = false, HasStartRd = false;
 
-  do{
+  while(argu_idx < argc){
     int option = check_argu(argv[argu_idx]);
     switch(option){
-    case 1:
-      // the next argv is the optical file name;
-      // -p optical_filename 
-      argu_idx++;
-      file_status = check_filename(argv[argu_idx], MAX_Length);;
-      if(file_status != 0){ return -1; } 
-      strcpy(optical_filename, argv[argu_idx]);
-      argu_idx++;
+    case 1: // -p optical_filename
+      optical_filename = argv[++argu_idx];
+      if(!check_input_file(optical_filename)) return false;
       HasOptFile = true;
       break;
-    case 2:
-      // the next argv is the finite element file name;
-      // -f finite_element_filename
-      argu_idx++;
-      file_status = check_filename(argv[argu_idx], MAX_Length);;
-      if(file_status != 0){ return -1; } 
-      strcpy(fem_filename, argv[argu_idx]);
-      argu_idx++;
+    case 2: // -f fem_filename
+      fem_filename = argv[++argu_idx];
+      if(!check_input_file(fem_filename)) return false;
       HasFEMFile = true;
       break;
-    case 3:
-      // the next argv is the source filename
-      // -s source_filename
-      argu_idx++;
-      file_status = check_filename(argv[argu_idx], MAX_Length);;
-      if(file_status != 0){ return -1; } 
-      strcpy(source_filename, argv[argu_idx]);
-      argu_idx++;
+    case 3: // -s source_filename
+      source_filename = argv[++argu_idx];
+      if(!check_input_file(source_filename)) return false;
       HasSouFile = true;
       break;
-    case 4:
-      // the next argv is the output format
-      // -m [s|i|is|si|t]
-      // s:     surface fluence               (internal id = 1)
-      // i:     internal fluence              (internal id = 2)
-      // is|si: surface and internal fluence  (internal id = 3)
-      // t:     tecplot                       (internal id = 4)
-      argu_idx++;
-      if(strlen(argv[argu_idx])==1){
-	if(argv[argu_idx][0]=='s'){
-	  output_format = 1;
-	}else if(argv[argu_idx][0]=='i'){
-	  output_format = 2;
-	}else if(argv[argu_idx][0]=='t'){
-	  output_format = 4;
-	}else{
-	  cerr << "Unsupported output format." << endl;
-	  cerr << "TIM-OS will use the default output format (surface fluence only)." << endl;
-	  output_format = 1;
-	}
-      }else{
-	if(strlen(argv[argu_idx])==2){
-	  if((argv[argu_idx][0]=='s' && argv[argu_idx][1]=='i') || 
-	     (argv[argu_idx][0]=='i' && argv[argu_idx][1]=='s')){
-	    output_format = 3;
-	  }else{
-	    cerr << "Unsupported output format." << endl;
-	    cerr << "TIM-OS will use the default output format (surface fluence only)." << endl;
-	    output_format = 1;
-	  }
-	}else{
-	  cerr << "Unsupported output format." << endl;
-	  cerr << "TIM-OS will use the default output format (surface fluence only)." << endl;
-	  output_format = 1;
-	}
+    case 4: { // -m [s|i|is|si]
+      std::string_view fmt = argv[++argu_idx];
+      if     (fmt == "s" ) output_format = 1;
+      else if(fmt == "i" ) output_format = 2;
+      else if(fmt == "si" || fmt == "is") output_format = 3;
+      else if(fmt == "t" ) output_format = 4;
+      else{
+        cerr << "Unsupported output format '" << fmt
+             << "'. Using default: surface fluence only.\n";
+        output_format = 1;
       }
-      argu_idx++;
       HasFormat = true;
       break;
-    case 5:
-      // the next argv is the output filename
-      // -o output_filename
-      argu_idx++;
-      if(strlen(argv[argu_idx])>=FILENAME_MAX){
-	cerr << "The maximum length of a filename allowed in this program is: " <<   MAX_Length << "." << endl;
-	cerr << "Current optical filename is longer than this." << endl;
-	return -1;
-      }
-      strcpy(output_filename, argv[argu_idx]);
-      argu_idx++;
+    }
+    case 5: // -o output_filename
+      output_filename = argv[++argu_idx];
       HasOutFile = true;
       break;
-    case 6:
-      // the next argv is the number of thread
-      // -t num_thread 
-      argu_idx++;
-      NumThread = atoi(argv[argu_idx]);
-      if(NumThread<=0 || NumThread>=1024){
-	NumThread = 64;
-      }
-      argu_idx++;
+    case 6: // -t num_thread
+      NumThread = std::stoi(argv[++argu_idx]);
+      if(NumThread <= 0 || NumThread >= 1024) NumThread = 64;
       HasThread = true;
       break;
-    case 7:
-      argu_idx++;
-      StartRandIdx = atoi(argv[argu_idx]);
-      argu_idx++;
+    case 7: // -r start_rand_id
+      StartRandIdx = std::stoi(argv[++argu_idx]);
       HasStartRd = true;
       break;
-    case 8:
-      TimeDomain = true;
-      argu_idx++;
-      TimeStep = atof(argv[argu_idx]);
-      argu_idx++;
-      NumTimeStep = atoi(argv[argu_idx]);
-      argu_idx++;
-      if(NumTimeStep<=1){
-	cerr << "Num_Temp_Step should > 1 for time domain simulation" << endl;
-	return 0;
+    case 8: // -T time_step num_steps
+      TimeDomain  = true;
+      TimeStep    = std::stod(argv[++argu_idx]);
+      NumTimeStep = std::stoi(argv[++argu_idx]);
+      if(NumTimeStep <= 1){
+        cerr << "Num_Temp_Step must be > 1 for time-domain simulation.\n";
+        return false;
       }
-      InvTimeStep = 1/TimeStep;
-      InvLightSpeedMutTimeStep = INV_LIGHT_SPEED*InvTimeStep;
+      InvTimeStep               = 1.0 / TimeStep;
+      InvLightSpeedMutTimeStep  = INV_LIGHT_SPEED * InvTimeStep;
       break;
-    default :
+    default:
       print_usage();
       return false;
     }
-  }while(argu_idx<argc);
+    argu_idx++;
+  }
 
-  if(HasOptFile==false || HasFEMFile==false || HasSouFile == false || HasOutFile == false){
+  if(!HasOptFile || !HasFEMFile || !HasSouFile || !HasOutFile){
     print_usage();
     return false;
   }
-  if(HasThread == false){
-    NumThread = 1;
-  }
-  if(HasFormat == false){
-    output_format = 1;
-  }
-  if(HasStartRd == false){
-    StartRandIdx = 1;
-  }else{
-    if(StartRandIdx<=0 || StartRandIdx+NumThread>1024){
-      cerr << "StartRandIdx is out of range." << endl;
-      return false;
-    }
+  if(!HasThread)  NumThread    = 1;
+  if(!HasFormat)  output_format = 1;
+  if(!HasStartRd) StartRandIdx = 1;
+  else if(StartRandIdx <= 0 || StartRandIdx + NumThread > 1024){
+    cerr << "StartRandIdx is out of range.\n";
+    return false;
   }
   return true;
 }
@@ -2290,31 +2212,15 @@ int main(int argc, char *argv[])
   if(argc<9){ print_usage(); return -1;
   }
 
-  int MAX_Length = 1024;
-  if (FILENAME_MAX<1024){ MAX_Length = FILENAME_MAX; }
+  std::string optical_filename, fem_filename, source_filename, output_filename;
+  int output_format = 1; // 1=surface, 2=internal, 3=both
 
-  char * optical_filename;
-  char * fem_filename;
-  char * source_filename;
-  char * output_filename;
-
-  optical_filename = new char [MAX_Length+1];
-  fem_filename     = new char [MAX_Length+1];
-  source_filename  = new char [MAX_Length+1];
-  output_filename  = new char [MAX_Length+1];
-
-  int output_format;
-  // 001 surface
-  // 010 internal
-  // 011 surface and internal
-  // 100 tecplot
-
-  if(!parse_argu(argc, argv, MAX_Length, 
-		 optical_filename, fem_filename, source_filename, output_filename,
-		 output_format,
-		 g_NumThread, g_StartRandIdx,
-		 g_TimeDomain, g_TimeStep, g_InvTimeStep, 
-		 g_InvLightSpeedMutTimeStep, g_NumTimeStep)){
+  if(!parse_argu(argc, argv,
+                 optical_filename, fem_filename, source_filename, output_filename,
+                 output_format,
+                 g_NumThread, g_StartRandIdx,
+                 g_TimeDomain, g_TimeStep, g_InvTimeStep,
+                 g_InvLightSpeedMutTimeStep, g_NumTimeStep)){
     return -1;
   }
   // ---------------------------------------------------------------
@@ -2391,20 +2297,8 @@ int main(int argc, char *argv[])
     g_Absorption = new double [g_NumElem+1];
     for (int j=0; j<=g_NumElem; j++){ g_Absorption[j] = 0; }
   }else{
-    g_TimeSurfMeas = new double * [g_NumBoundaryTrig+1];
-    for (int j=0; j<=g_NumBoundaryTrig; j++){ 
-      g_TimeSurfMeas[j] = new double [g_NumTimeStep];
-      for (int k=0; k<g_NumTimeStep; k++){
-	g_TimeSurfMeas[j][k] = 0; 
-      }
-    }
-    g_TimeAbsorption = new double * [g_NumElem+1];
-    for (int j=0; j<=g_NumElem; j++){ 
-      g_TimeAbsorption[j] = new double [g_NumTimeStep];
-      for (int k=0; k<g_NumTimeStep; k++){
-	g_TimeAbsorption[j][k] = 0;
-      }
-    }
+    g_TimeSurfMeas  .assign(g_NumBoundaryTrig+1, std::vector<double>(g_NumTimeStep, 0.0));
+    g_TimeAbsorption.assign(g_NumElem+1,          std::vector<double>(g_NumTimeStep, 0.0));
   }
 
   //  cerr << optical_filename << " " << fem_filename << " " << source_filename << endl;
@@ -2415,13 +2309,14 @@ int main(int argc, char *argv[])
   g_SimedPhoton = 0;
 
   // ----------------------------------------------------------------------
-  // Start Simulation
+  // Start Simulation — std::jthread auto-joins on destruction
   // ----------------------------------------------------------------------
-  pthread_t thread_id[g_NumThread];
-  for(int i = 0; i < g_NumThread; i++)
-    pthread_create(&thread_id[i], NULL, ThreadPhotonPropagation, (void *)(uintptr_t)i);
-  for(int i = 0; i < g_NumThread; i++)
-    pthread_join(thread_id[i], NULL);
+  {
+    std::vector<std::jthread> threads;
+    threads.reserve(g_NumThread);
+    for(int i = 0; i < g_NumThread; i++)
+      threads.emplace_back([i]{ ThreadPhotonPropagation((void*)(uintptr_t)i); });
+  } // all threads joined here
   
 
   // ----------------------------------------------------------------------
@@ -2482,24 +2377,14 @@ int main(int argc, char *argv[])
   delete [] g_TriNodes;
   delete [] g_Triangles;
 
-  delete [] optical_filename;
-  delete [] fem_filename;
-  delete [] source_filename;
-  delete [] output_filename;
+
 
  if(!g_TimeDomain){
    delete [] g_SurfMeas;
    delete [] g_Absorption;
   }else{
-    for (int j=0; j<=g_NumBoundaryTrig; j++){ 
-      delete [] g_TimeSurfMeas[j];
-    }
-    delete [] g_TimeSurfMeas;
-
-    for (int j=0; j<=g_NumElem; j++){ 
-      delete [] g_TimeAbsorption[j];
-    }
-    delete [] g_TimeAbsorption; 
+    g_TimeSurfMeas.clear();
+    g_TimeAbsorption.clear();
   }
 
   cerr << endl;
