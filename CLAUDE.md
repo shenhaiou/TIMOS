@@ -8,13 +8,23 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Build
 
-Requires Intel C/C++ compiler (`icpc`) and Intel MKL:
+On **Apple Silicon (M1/M2/M3)** — use the Makefile:
 
 ```sh
-icpc -static -mkl -O3 -o source/timos source/TIMOS.cpp
+make          # fast release build (development)
+make pgo      # profile-guided build — ~20% faster, takes ~3min
 ```
 
-The compiled binary is `source/timos`. There is no Makefile; compilation is a single command.
+The compiled binary is `source/timos`.
+
+**What the optimised build uses:**
+- `-march=native -ffast-math -flto` — M1-specific codegen + LTO
+- `-DHAS_ACCELERATE -framework Accelerate` — `BNNSRandomGenerator` (AES-CTR) + `vvlog`/`vvsincos` for batched RNG math
+- ARM NEON (`arm_neon.h`) for `PhotonTetrahedronIntersection` — all 4 dot products in 2 NEON FMA pairs with sequential `vld1q_f64` from SoA `TriNorm` layout
+- `os_unfair_lock` instead of `pthread_mutex` — lower-overhead Apple Silicon lock
+- Per-thread local accumulators (replace the 12 MB `PhotonInfo` buffer) — one final lock per thread instead of per-batch locking
+
+On **Intel** (original): `icpc -static -mkl -O3 -o source/timos source/TIMOS.cpp`
 
 ## Running a Simulation
 

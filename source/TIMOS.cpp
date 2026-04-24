@@ -6,10 +6,15 @@
 // 2011
 //----------------------------------------------------
 
-// To compile on macOS:
-// clang++ -O3 -std=c++17 -o timos TIMOS.cpp
+// To compile on macOS (M1):
+// clang++ -O3 -std=c++17 -march=native -ffast-math -funroll-loops -flto \
+//         -DHAS_ACCELERATE -framework Accelerate -o timos TIMOS.cpp
 
 #define _REENTRANT
+#if defined(__ARM_NEON) || defined(__ARM_NEON__)
+#  include <arm_neon.h>
+#  define TIMOS_NEON 1
+#endif
 #include <time.h>
 #include <iostream>
 #include <fstream>
@@ -27,6 +32,7 @@
 #include <sys/resource.h>
 
 #include <cmath>
+#include <dispatch/dispatch.h>
 #include "rng.h"
 
 #include "timos.h"
@@ -72,12 +78,10 @@ const double G_COS_90_D  = 1.0E-7;
 
 
 // +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-// Variables for thread mutex
-//    They are global variables, however, 
-//    they do not follow the format for global variable
-struct timespec some_time = {0, 10000};
-pthread_mutex_t Result_Lock,  * m_Result_Lock = & Result_Lock;
-pthread_mutex_t Source_Lock,  * m_Source_Lock = & Source_Lock;
+// Variables for thread mutex — use os_unfair_lock (Apple-native, lower overhead than pthread_mutex)
+#include <os/lock.h>
+static os_unfair_lock Result_Lock = OS_UNFAIR_LOCK_INIT;
+static os_unfair_lock Source_Lock = OS_UNFAIR_LOCK_INIT;
 
 // +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 // Definition of global variables
@@ -569,9 +573,11 @@ int PreProcessor(int        & numElem,
     double z4 = (nodes[elemNodes[i].N[0]].Z+nodes[elemNodes[i].N[1]].Z+
 		 nodes[elemNodes[i].N[2]].Z+nodes[elemNodes[i].N[3]].Z)/4;
 
-    int kkk = 0;
+    // SoA TriNorm layout: [nx0,nx1,nx2,nx3, ny0,ny1,ny2,ny3, nz0,nz1,nz2,nz3, d0,d1,d2,d3]
+    // Face j occupies indices [j], [j+4], [j+8], [j+12].
+    // This enables sequential vld1q_f64 loads in PhotonTetrahedronIntersection.
 
-    for (int j=0; j<=3; j++){ // 
+    for (int j=0; j<=3; j++){
       if (triangles[elemNodes[i].T[j]].Num_Elem == 1){
 	elems[i].AdjElemIdx[j] = -triangles[elemNodes[i].T[j]].BoundaryIdx;
       }else{
@@ -586,23 +592,21 @@ int PreProcessor(int        & numElem,
       double b = ny = triangles[elemNodes[i].T[j]].Y;
       double c = nz = triangles[elemNodes[i].T[j]].Z;
       double d      = triangles[elemNodes[i].T[j]].d;
-      
+
       double t = -(a*x4 + b*y4 + c*z4 + d)/(a*nx + b*ny + c*nz);
 
       if(t>0){
-	//	elems[i].TriInfo[j].Area = triNodes[elemNodes[i].T[j]].Area;
-	elems[i].TriNorm[kkk++] = -nx;
-	elems[i].TriNorm[kkk++] = -ny;
-	elems[i].TriNorm[kkk++] = -nz;
-	elems[i].TriNorm[kkk++] = -d;
+	elems[i].TriNorm[j   ] = -nx;
+	elems[i].TriNorm[j+ 4] = -ny;
+	elems[i].TriNorm[j+ 8] = -nz;
+	elems[i].TriNorm[j+12] = -d;
 	elemNodes[i].Vol += triNodes[elemNodes[i].T[j]].Area * t / 3.0;
       }else if(t<0){
-	//	elems[i].TriInfo[j].Area = triNodes[elemNodes[i].T[j]].Area;
-	elems[i].TriNorm[kkk++] = nx;
-	elems[i].TriNorm[kkk++] = ny;
-	elems[i].TriNorm[kkk++] = nz;
-	elems[i].TriNorm[kkk++] = d;
-	elemNodes[i].Vol += - triNodes[elemNodes[i].T[j]].Area * t / 3.0;
+	elems[i].TriNorm[j   ] = nx;
+	elems[i].TriNorm[j+ 4] = ny;
+	elems[i].TriNorm[j+ 8] = nz;
+	elems[i].TriNorm[j+12] = d;
+	elemNodes[i].Vol += -triNodes[elemNodes[i].T[j]].Area * t / 3.0;
       }
     }
   }
@@ -740,28 +744,29 @@ int Prepare_Source(int        & numNode,
       sources[i].ElemIdx = -1;
       for (int Cur_Elem=1; Cur_Elem<=numElem; Cur_Elem++){
 	double Min_H = 1000;
-	height[0] = (elems[Cur_Elem].TriNorm[0 ]*sources[i].Position.X + 
-		     elems[Cur_Elem].TriNorm[1 ]*sources[i].Position.Y + 
-		     elems[Cur_Elem].TriNorm[2 ]*sources[i].Position.Z + 
-		     elems[Cur_Elem].TriNorm[3 ]); 
+	// SoA: face j = [j], [j+4], [j+8], [j+12]
+	height[0] = (elems[Cur_Elem].TriNorm[0]*sources[i].Position.X +
+		     elems[Cur_Elem].TriNorm[4]*sources[i].Position.Y +
+		     elems[Cur_Elem].TriNorm[8]*sources[i].Position.Z +
+		     elems[Cur_Elem].TriNorm[12]);
 	if(height[0]<0){goto L_ProcSource_Outside;}
 	if(height[0]<Min_H){Min_H = height[0];}
-	height[1] = (elems[Cur_Elem].TriNorm[4 ]*sources[i].Position.X + 
-	             elems[Cur_Elem].TriNorm[5 ]*sources[i].Position.Y + 
-		     elems[Cur_Elem].TriNorm[6 ]*sources[i].Position.Z + 
-		     elems[Cur_Elem].TriNorm[7 ]);
+	height[1] = (elems[Cur_Elem].TriNorm[1]*sources[i].Position.X +
+		     elems[Cur_Elem].TriNorm[5]*sources[i].Position.Y +
+		     elems[Cur_Elem].TriNorm[9]*sources[i].Position.Z +
+		     elems[Cur_Elem].TriNorm[13]);
 	if(height[1]<0){goto L_ProcSource_Outside;}
-	if(height[1]<Min_H){Min_H = height[1];} 
-	height[2] = (elems[Cur_Elem].TriNorm[8 ]*sources[i].Position.X + 
-		     elems[Cur_Elem].TriNorm[9 ]*sources[i].Position.Y + 
-		     elems[Cur_Elem].TriNorm[10]*sources[i].Position.Z + 
-		     elems[Cur_Elem].TriNorm[11]);
+	if(height[1]<Min_H){Min_H = height[1];}
+	height[2] = (elems[Cur_Elem].TriNorm[2]*sources[i].Position.X +
+		     elems[Cur_Elem].TriNorm[6]*sources[i].Position.Y +
+		     elems[Cur_Elem].TriNorm[10]*sources[i].Position.Z +
+		     elems[Cur_Elem].TriNorm[14]);
 	if(height[2]<0){goto L_ProcSource_Outside;}
-	if(height[2]<Min_H){Min_H = height[2];} 
-	height[3] = (elems[Cur_Elem].TriNorm[12]*sources[i].Position.X + 
-		     elems[Cur_Elem].TriNorm[13]*sources[i].Position.Y + 
-		     elems[Cur_Elem].TriNorm[14]*sources[i].Position.Z + 
-		     elems[Cur_Elem].TriNorm[15]); 
+	if(height[2]<Min_H){Min_H = height[2];}
+	height[3] = (elems[Cur_Elem].TriNorm[3]*sources[i].Position.X +
+		     elems[Cur_Elem].TriNorm[7]*sources[i].Position.Y +
+		     elems[Cur_Elem].TriNorm[11]*sources[i].Position.Z +
+		     elems[Cur_Elem].TriNorm[15]);
 	if(height[3]<0){goto L_ProcSource_Outside;}
 	if(height[3]<Min_H){Min_H = height[3];}
 	sources[i].ElemIdx = Cur_Elem;
@@ -844,23 +849,27 @@ int Prepare_Source(int        & numNode,
 	if (sources[i].SurfTriNodes[0]==elemNodes[sources[i].ElemIdx].N[0]){
 	  if (sources[i].SurfTriNodes[1]==elemNodes[sources[i].ElemIdx].N[1]){
 	    if (sources[i].SurfTriNodes[2]==elemNodes[sources[i].ElemIdx].N[2]){
+	      // face 0: SoA indices [0],[4],[8]
 	      sources[i].IncAngle.X = elems[sources[i].ElemIdx].TriNorm[0];
-	      sources[i].IncAngle.Y = elems[sources[i].ElemIdx].TriNorm[1];
-	      sources[i].IncAngle.Z = elems[sources[i].ElemIdx].TriNorm[2];
+	      sources[i].IncAngle.Y = elems[sources[i].ElemIdx].TriNorm[4];
+	      sources[i].IncAngle.Z = elems[sources[i].ElemIdx].TriNorm[8];
 	    }else{
-	      sources[i].IncAngle.X = elems[sources[i].ElemIdx].TriNorm[4];
+	      // face 1: SoA indices [1],[5],[9]
+	      sources[i].IncAngle.X = elems[sources[i].ElemIdx].TriNorm[1];
 	      sources[i].IncAngle.Y = elems[sources[i].ElemIdx].TriNorm[5];
-	      sources[i].IncAngle.Z = elems[sources[i].ElemIdx].TriNorm[6];
+	      sources[i].IncAngle.Z = elems[sources[i].ElemIdx].TriNorm[9];
 	    }
 	  }else{
-	    sources[i].IncAngle.X = elems[sources[i].ElemIdx].TriNorm[8];
-	    sources[i].IncAngle.Y = elems[sources[i].ElemIdx].TriNorm[9];
+	    // face 2: SoA indices [2],[6],[10]
+	    sources[i].IncAngle.X = elems[sources[i].ElemIdx].TriNorm[2];
+	    sources[i].IncAngle.Y = elems[sources[i].ElemIdx].TriNorm[6];
 	    sources[i].IncAngle.Z = elems[sources[i].ElemIdx].TriNorm[10];
 	  }
 	}else{
-	  sources[i].IncAngle.X = elems[sources[i].ElemIdx].TriNorm[12];
-	  sources[i].IncAngle.Y = elems[sources[i].ElemIdx].TriNorm[13];
-	  sources[i].IncAngle.Z = elems[sources[i].ElemIdx].TriNorm[14];
+	  // face 3: SoA indices [3],[7],[11]
+	  sources[i].IncAngle.X = elems[sources[i].ElemIdx].TriNorm[3];
+	  sources[i].IncAngle.Y = elems[sources[i].ElemIdx].TriNorm[7];
+	  sources[i].IncAngle.Z = elems[sources[i].ElemIdx].TriNorm[11];
 	}
       }
       
@@ -949,52 +958,30 @@ long long int ReadSource(char     * filename,
 
 
 inline int Fetch_Source(TSource & ThreadSources, int & SourceIdx, int tid){
-  int err;
-  // if return 0, then there is no photon left in the source
-  // else return the number of photon assigned to the thread
+  if(SourceIdx >= g_NumSource) return 0;
+
   int num_fetched_photon = 0;
- Label_Fetch_Source:
-  if(SourceIdx>=g_NumSource){
-    return 0;
-  }
-  if(pthread_mutex_trylock(m_Source_Lock) == 0){
-    if(g_Sources[SourceIdx].NumPhoton<=0){
+  os_unfair_lock_lock(&Source_Lock);
+  if(SourceIdx < g_NumSource){
+    if(g_Sources[SourceIdx].NumPhoton <= 0){
       SourceIdx++;
-      if(SourceIdx>=g_NumSource){
-	// No more photon
-	if((err = pthread_mutex_unlock(m_Source_Lock)) != 0){
-	  cerr << "unlock failure, tid: " << tid << "\t error: " << err << endl;
-	  exit(104);
-	}
-	return 0;
-      }
     }
-
-    ThreadSources.SourceType      = g_Sources[SourceIdx].SourceType;
-    ThreadSources.ElemIdx         = g_Sources[SourceIdx].ElemIdx;
-    ThreadSources.Position        = g_Sources[SourceIdx].Position;
-    ThreadSources.IncAngle        = g_Sources[SourceIdx].IncAngle;
-    ThreadSources.SurfTriNodes[0] = g_Sources[SourceIdx].SurfTriNodes[0];
-    ThreadSources.SurfTriNodes[1] = g_Sources[SourceIdx].SurfTriNodes[1];
-    ThreadSources.SurfTriNodes[2] = g_Sources[SourceIdx].SurfTriNodes[2];
-    ThreadSources.SurfTriIdx      = g_Sources[SourceIdx].SurfTriIdx;
-    
-    if(g_Sources[SourceIdx].NumPhoton >= 1000){
-      num_fetched_photon = 1000;
-    }else{
-      num_fetched_photon = g_Sources[SourceIdx].NumPhoton;
+    if(SourceIdx < g_NumSource){
+      ThreadSources.SourceType      = g_Sources[SourceIdx].SourceType;
+      ThreadSources.ElemIdx         = g_Sources[SourceIdx].ElemIdx;
+      ThreadSources.Position        = g_Sources[SourceIdx].Position;
+      ThreadSources.IncAngle        = g_Sources[SourceIdx].IncAngle;
+      ThreadSources.SurfTriNodes[0] = g_Sources[SourceIdx].SurfTriNodes[0];
+      ThreadSources.SurfTriNodes[1] = g_Sources[SourceIdx].SurfTriNodes[1];
+      ThreadSources.SurfTriNodes[2] = g_Sources[SourceIdx].SurfTriNodes[2];
+      ThreadSources.SurfTriIdx      = g_Sources[SourceIdx].SurfTriIdx;
+      num_fetched_photon = (g_Sources[SourceIdx].NumPhoton >= 1000)
+                           ? 1000 : g_Sources[SourceIdx].NumPhoton;
+      ThreadSources.NumPhoton = num_fetched_photon;
+      g_Sources[SourceIdx].NumPhoton -= num_fetched_photon;
     }
-    ThreadSources.NumPhoton = num_fetched_photon;
-    g_Sources[SourceIdx].NumPhoton -= num_fetched_photon;
-
-    if((err = pthread_mutex_unlock(m_Source_Lock)) != 0){
-      cerr << "unlock failure, \t error: " << err << endl;
-      exit(104);
-    }
-  }else{
-    nanosleep(&some_time, NULL);
-    goto Label_Fetch_Source;
   }
+  os_unfair_lock_unlock(&Source_Lock);
   return num_fetched_photon;
 }
 
@@ -1177,145 +1164,115 @@ inline int InitialPhoton_TriangleSource(TPhoton & Photon,
 }
 
 inline void SaveLocal2Global(TPhotonInfo * PhotonInfo, int & PhotonInfo_Idx){
-  int err;
- Lable_Result_2:
-  if(pthread_mutex_trylock(m_Result_Lock) == 0){
-    if(g_TimeDomain){
-      for (int i=1; i<=PhotonInfo_Idx; i++){
-	int Type = PhotonInfo[i].Time_Type & 1;
-	int Time_Idx = PhotonInfo[i].Time_Type >> 1;
-	if(Type == 0){
-	  g_TimeAbsorption[PhotonInfo[i].Idx][Time_Idx]+=PhotonInfo[i].LostWeight;
-	}else{
-	  g_TimeSurfMeas[PhotonInfo[i].Idx][Time_Idx]+= PhotonInfo[i].LostWeight;
-	}
-      }
-    }else{
-      for (int i=1; i<=PhotonInfo_Idx; i++){
-	int Type = PhotonInfo[i].Time_Type & 1;
-	if(Type == 0){
-	  g_Absorption[PhotonInfo[i].Idx]+=PhotonInfo[i].LostWeight;
-	}else{
-	  g_SurfMeas[PhotonInfo[i].Idx]+= PhotonInfo[i].LostWeight;
-	}
-      }
-    }
-    
-    PhotonInfo_Idx = 0;
-    if((err = pthread_mutex_unlock(m_Result_Lock)) != 0){
-      cerr << "unlock failure, \t error: " << err << endl;
-      exit(104);
+  os_unfair_lock_lock(&Result_Lock);
+  if(g_TimeDomain){
+    for(int i=1; i<=PhotonInfo_Idx; i++){
+      int Type     = PhotonInfo[i].Time_Type & 1;
+      int Time_Idx = PhotonInfo[i].Time_Type >> 1;
+      if(Type == 0) g_TimeAbsorption[PhotonInfo[i].Idx][Time_Idx] += PhotonInfo[i].LostWeight;
+      else          g_TimeSurfMeas  [PhotonInfo[i].Idx][Time_Idx] += PhotonInfo[i].LostWeight;
     }
   }else{
-    nanosleep(&some_time, NULL);
-    goto Lable_Result_2;
+    for(int i=1; i<=PhotonInfo_Idx; i++){
+      int Type = PhotonInfo[i].Time_Type & 1;
+      if(Type == 0) g_Absorption[PhotonInfo[i].Idx] += PhotonInfo[i].LostWeight;
+      else          g_SurfMeas  [PhotonInfo[i].Idx] += PhotonInfo[i].LostWeight;
+    }
   }
+  PhotonInfo_Idx = 0;
+  os_unfair_lock_unlock(&Result_Lock);
 }
 
-inline void PhotonTetrahedronIntersection(double  & MinPos, 
-					  int     & MinPos_Idx, 
-					  double  & MinCos,
-					  double  * Norm, 
-					  TPhoton & Photon){
-
-  // Code added to verify the photon is indead within the elements
-  // Assume the point is at <X, Y, Z> and the triangle has a normal vector 
-  // <NX, NY, NZ> and a equation NX*x + NY*y + NZ*z + d = 0, 
-  // then we need to calculate the distance from the point to the triangle.
-  // The normal vector which pass through <X, Y, Z> can be described by a 
-  // Equation as: <X, Y, Z> + t * <NX, NY, NZ>
-  // Hence, we can have:
-  // NX*(X+t*NX) + NY*(Y+t*NY) + NZ*(Z+t*NZ)+d = 0
-  //         NX*X + NY*Y + NZ*Z + d
-  // t = -  -------------------------
-  //          NX*NX + NY*NY + NZ*NZ
-  // Since the normal vector is point into the tetrahedron
-  // Then height = NX*X + NY*Y + NZ*Z + d
-  
-  // For the ray of direction UX, UY, UZ,
-  //                  height
-  // t = -  -------------------------
-  //          NX*UX + NY*UY + NZ*UZ
-  // ---------------------------------------------------------------------
-  MinPos = 1e10;
+inline void PhotonTetrahedronIntersection(double  & MinPos,
+                                          int     & MinPos_Idx,
+                                          double  & MinCos,
+                                          double  * Norm,
+                                          TPhoton & Photon){
+  // Compute step t = -height / dot(N, U) for each of 4 triangle faces.
+  // height = dot(N, P) + d   (signed distance from point to plane)
+  // t is valid only when dot(N, U) < 0 (photon moving toward face).
+  MinPos     = 1e10;
   MinPos_Idx = -1;
 
-  double TTemp[4];
-  double StepTemp;
-  double height;
+#ifdef TIMOS_NEON
+  // Compute all 4 dot(N,U) and all 4 height = dot(N,P)+d in parallel.
+  // SoA TriNorm: [nx0,nx1,nx2,nx3, ny0,ny1,ny2,ny3, nz0,nz1,nz2,nz3, d0,d1,d2,d3]
+  // Sequential vld1q_f64 loads — fully pipelined on M1.
+  float64x2_t vUX = vdupq_n_f64(Photon.UX);
+  float64x2_t vUY = vdupq_n_f64(Photon.UY);
+  float64x2_t vUZ = vdupq_n_f64(Photon.UZ);
+  float64x2_t vX  = vdupq_n_f64(Photon.X);
+  float64x2_t vY  = vdupq_n_f64(Photon.Y);
+  float64x2_t vZ  = vdupq_n_f64(Photon.Z);
 
+  float64x2_t nx01 = vld1q_f64(&Norm[0]);   float64x2_t nx23 = vld1q_f64(&Norm[2]);
+  float64x2_t ny01 = vld1q_f64(&Norm[4]);   float64x2_t ny23 = vld1q_f64(&Norm[6]);
+  float64x2_t nz01 = vld1q_f64(&Norm[8]);   float64x2_t nz23 = vld1q_f64(&Norm[10]);
+  float64x2_t d01  = vld1q_f64(&Norm[12]);  float64x2_t d23  = vld1q_f64(&Norm[14]);
+
+  float64x2_t t01  = vmlaq_f64(vmlaq_f64(vmulq_f64(nx01, vUX), ny01, vUY), nz01, vUZ);
+  float64x2_t h01  = vmlaq_f64(vmlaq_f64(vmlaq_f64(d01,  nx01, vX),  ny01, vY),  nz01, vZ);
+  float64x2_t t23  = vmlaq_f64(vmlaq_f64(vmulq_f64(nx23, vUX), ny23, vUY), nz23, vUZ);
+  float64x2_t h23  = vmlaq_f64(vmlaq_f64(vmlaq_f64(d23,  nx23, vX),  ny23, vY),  nz23, vZ);
+
+  // Extract lanes directly — avoids store-load roundtrip latency (3-5 cycles on M1)
+  double t0 = vgetq_lane_f64(t01, 0), h0 = vgetq_lane_f64(h01, 0);
+  if(t0 < 0){ double s = -h0/t0; if(s < MinPos){ MinCos = t0; MinPos = s; MinPos_Idx = 0; } }
+  double t1 = vgetq_lane_f64(t01, 1), h1 = vgetq_lane_f64(h01, 1);
+  if(t1 < 0){ double s = -h1/t1; if(s < MinPos){ MinCos = t1; MinPos = s; MinPos_Idx = 1; } }
+  double t2 = vgetq_lane_f64(t23, 0), h2 = vgetq_lane_f64(h23, 0);
+  if(t2 < 0){ double s = -h2/t2; if(s < MinPos){ MinCos = t2; MinPos = s; MinPos_Idx = 2; } }
+  double t3 = vgetq_lane_f64(t23, 1), h3 = vgetq_lane_f64(h23, 1);
+  if(t3 < 0){ double s = -h3/t3; if(s < MinPos){ MinCos = t3; MinPos = s; MinPos_Idx = 3; } }
+#else
+  double TTemp[4], StepTemp, height;
   TTemp[0] = Norm[0 ]*Photon.UX + Norm[1 ]*Photon.UY + Norm[2 ]*Photon.UZ;
   TTemp[1] = Norm[4 ]*Photon.UX + Norm[5 ]*Photon.UY + Norm[6 ]*Photon.UZ;
   TTemp[2] = Norm[8 ]*Photon.UX + Norm[9 ]*Photon.UY + Norm[10]*Photon.UZ;
   TTemp[3] = Norm[12]*Photon.UX + Norm[13]*Photon.UY + Norm[14]*Photon.UZ;
-
-  for (int i=0; i<=3; i++){
-    //	  if(TTemp[i]<0 && StepTemp[i]<MinPos){
-    if(TTemp[i]<0){
-      height = (Norm[i*4  ]*Photon.X + Norm[i*4+1]*Photon.Y + Norm[i*4+2]*Photon.Z + Norm[i*4+3]); 
-      StepTemp = -height/TTemp[i];
-      if(StepTemp<MinPos){
-	MinCos     = TTemp[i];
-	MinPos     = StepTemp;
-	MinPos_Idx = i;
+  for(int i = 0; i <= 3; i++){
+    if(TTemp[i] < 0){
+      height   = Norm[i*4]*Photon.X + Norm[i*4+1]*Photon.Y + Norm[i*4+2]*Photon.Z + Norm[i*4+3];
+      StepTemp = -height / TTemp[i];
+      if(StepTemp < MinPos){
+        MinCos     = TTemp[i];
+        MinPos     = StepTemp;
+        MinPos_Idx = i;
       }
     }
   }
+#endif
 }
 
-inline void ScatterPhoton(TPhoton              & Photon,
-			  double               & g,
-			  int                  & randidx_5,
-			  double               * psi_sincos,
-			  double               * randnums5,
-			  double               * psi_sin,
-			  double               * psi_cos,
-			  timos::Xoshiro256ss  & rng){
+inline void ScatterPhoton(TPhoton        & Photon,
+                          double         & g,
+                          timos::RngPool & rng){
 
-  double cost, sint, cosp, sinp;
-  double temp, temp1, temp2;
+  double cost, sinp, cosp;
   if(g<1){
+    double u = rng.get_uniform();
     if(g==0){
-      // limit_{g->0} cost(g) = 2*rand_num - 1
-      cost = psi_sincos[randidx_5++]*2-1;
+      cost = u*2-1;
     }else{
-      //      temp = ThreadMedOptic[Photon.Cur_Med].OneMinsGG/(ThreadMedOptic[Photon.Cur_Med].OneMinsG+ThreadMedOptic[Photon.Cur_Med].TwoG*psi_sincos[randidx_5++]);
-      //      cost = (ThreadMedOptic[Photon.Cur_Med].OneAddGG - temp*temp)/(ThreadMedOptic[Photon.Cur_Med].TwoG);
-      temp = (1.0 - g*g)/(1 - g + 2*g*psi_sincos[randidx_5++]);
-      cost = (1.0 + g*g - temp*temp)/(2*g);
+      double tmp = (1.0 - g*g)/(1 - g + 2*g*u);
+      cost = (1.0 + g*g - tmp*tmp)/(2*g);
     }
-    sint = sqrt(1.0 - cost * cost);
-    sinp = psi_sincos[randidx_5++];
-    cosp = psi_sincos[randidx_5++];
-    
-    double ux=Photon.UX; 
-    double uy=Photon.UY; 
-    double uz=Photon.UZ;
-    
-    if(randidx_5>=MAXRANDNUM3){
-      randidx_5=0;
-      rng_fill_uniform(rng, randnums5, MAXRANDNUM, 0.0, 1.0);
-      rng_fill_uniform(rng, psi_sin,   MAXRANDNUM, 0.0, 2.0*M_PI);
-      for (int i = 0; i < MAXRANDNUM; i++) { psi_cos[i] = std::cos(psi_sin[i]); psi_sin[i] = std::sin(psi_sin[i]); }
-      int kkkk = 0;
-      for (int ii=0; ii<MAXRANDNUM; ii++){
-	psi_sincos[kkkk++]=randnums5[ii];
-	psi_sincos[kkkk++]=psi_sin[ii];
-	psi_sincos[kkkk++]=psi_cos[ii];
-      }
-    }
-    
-    if(fabs(uz)<=G_COS_0_D){
-      temp1 = sqrt(1.0 - uz*uz);
-      temp  = sint/temp1;
-      temp2 = uz*cosp;
+    rng.get_sincos(sinp, cosp);
+
+    double ux = Photon.UX, uy = Photon.UY, uz = Photon.UZ;
+    double sint = sqrt(1.0 - cost*cost);
+
+    if(fabs(uz) <= G_COS_0_D){
+      double temp1 = sqrt(1.0 - uz*uz);
+      double temp  = sint/temp1;
+      double temp2 = uz*cosp;
       Photon.UX = (ux*temp2 - uy*sinp)*temp + ux*cost;
       Photon.UY = (uy*temp2 + ux*sinp)*temp + uy*cost;
-      Photon.UZ = -sint*cosp*temp1 + uz*cost;      
+      Photon.UZ = -sint*cosp*temp1 + uz*cost;
     }else{
       Photon.UX = sint * cosp;
       Photon.UY = sint * sinp;
-      Photon.UZ = ((uz>0) ?  cost : -cost);
+      Photon.UZ = (uz>0) ? cost : -cost;
     }
   }
 }
@@ -1326,52 +1283,35 @@ void * ThreadPhotonPropagation(void * threadid){
 
   // Monte Carlo Simulation Main Function
 
-  // -------------------------------------------------------------
-  // In TIM-OS, each thread save results first in its local memory.
-  // When the local memory is full, it will then move results to global memory.
-  // -------------------------------------------------------------
-  const int     Thread_ArraySize = 1024*1024; 
-  TPhotonInfo   TempInfo;
-  TPhotonInfo * PhotonInfo = new TPhotonInfo [Thread_ArraySize+4];
+  // Per-thread accumulators (non-time-domain): array size equals mesh element count —
+  // fits entirely in L1 cache. Single lock at thread end; no per-step locking.
+  double * LocalAbsorption = new double[g_NumElem + 1]();
+  double * LocalSurfMeas   = new double[g_NumBoundaryTrig + 1]();
+
+  // Time-domain still uses the batch PhotonInfo buffer (complex time-bin logic).
+  const int     Thread_ArraySize = 1024*1024;
+  TPhotonInfo * PhotonInfo = g_TimeDomain ? new TPhotonInfo[Thread_ArraySize+4] : nullptr;
   int           PhotonInfo_Idx = 0;
-  PhotonInfo[0].Idx = -1;
+  if(g_TimeDomain) PhotonInfo[0].Idx = -1;
 
   // ------------------------------------------------------------
-  // declare and initial variables for random number generation 
+  // declare and initial variables for random number generation
+  // rng      — hot-path RngPool: uses Accelerate AES-CTR + vvlog/vvsincos
+  // rng_init — cold-path Xoshiro256ss: used only for photon init direction sampling
   // ------------------------------------------------------------
   double * randnums_xyz = new double [MAXRANDNUM3+6];
-  double * randnums1    = new double [MAXRANDNUM];
-  double * logrand3     = new double [MAXRANDNUM];
-  double * randnums5    = new double [MAXRANDNUM];
-  double * psi_sin      = new double [MAXRANDNUM];
-  double * psi_cos      = new double [MAXRANDNUM];
-  double * psi_sincos   = new double [MAXRANDNUM3+3];
+  int    Idx_U    = 0;
+  int    Idx_uvw  = 0;
 
-  int    Idx_U       = 0;
-  int    Idx_uvw     = 0;
-  int    randidx_1   = 0;
-  int    randidx_3   = 0;
-  int    randidx_5   = 0;
-
-  // Seed each thread independently using its index and a time-based entropy mix.
   uint64_t seed_state = ((uint64_t)(tid + g_StartRandIdx) * 0x9E3779B97F4A7C15ULL)
                         ^ (uint64_t)time(NULL);
-  timos::Xoshiro256ss rng(timos::splitmix64(seed_state));
+  uint64_t seed_a = timos::splitmix64(seed_state);
+  uint64_t seed_b = timos::splitmix64(seed_state);
 
-  rng_fill_uniform(rng, randnums_xyz, MAXRANDNUM3+6, -1.0, 1.0);
-  rng_fill_uniform(rng, randnums1,    MAXRANDNUM,     0.0, 1.0);
-  rng_fill_neglog( rng, logrand3,     MAXRANDNUM);
-  rng_fill_uniform(rng, randnums5,    MAXRANDNUM,     0.0, 1.0);
-  rng_fill_uniform(rng, psi_sin,      MAXRANDNUM,     0.0, 2.0*M_PI);
-  for (int i = 0; i < MAXRANDNUM; i++) { psi_cos[i] = std::cos(psi_sin[i]); psi_sin[i] = std::sin(psi_sin[i]); }
-  {
-    int kkkk = 0;
-    for (int ii=0; ii<MAXRANDNUM; ii++){
-      psi_sincos[kkkk++]=randnums5[ii];
-      psi_sincos[kkkk++]=psi_sin[ii];
-      psi_sincos[kkkk++]=psi_cos[ii];
-    }
-  }
+  timos::RngPool      rng(seed_a);
+  timos::Xoshiro256ss rng_init(seed_b);
+
+  rng_fill_uniform(rng_init, randnums_xyz, MAXRANDNUM3+6, -1.0, 1.0);
 
   // ------------------------------------------------------------
   // declare variables for the propagation process
@@ -1434,15 +1374,15 @@ void * ThreadPhotonPropagation(void * threadid){
       break;
     case 12 : 
       // External surface souce
-      InitialPhoton_TriangleSource(Photon, ThreadSources, randnums_xyz, Idx_U, rng);
+      InitialPhoton_TriangleSource(Photon, ThreadSources, randnums_xyz, Idx_U, rng_init);
       break;
     case 1 :
       // Internal point source
-      InitialPhoton_PointSource(Photon, ThreadSources, randnums_xyz, Idx_U, rng);
+      InitialPhoton_PointSource(Photon, ThreadSources, randnums_xyz, Idx_U, rng_init);
       break;
     case 2 :
       // Internal region source
-      InitialPhoton_RegionSource(Photon, ThreadSources, randnums_xyz, Idx_U, rng);
+      InitialPhoton_RegionSource(Photon, ThreadSources, randnums_xyz, Idx_U, rng_init);
       break;
     default : 
       continue;
@@ -1458,11 +1398,7 @@ void * ThreadPhotonPropagation(void * threadid){
       // --------------------------------------------------------------
       NumSteps++;
 
-      Photon.Step = -logrand3[randidx_3++] * ThreadMedOptic[Photon.Cur_Med].IMUAMUS;
-      if(randidx_3>=MAXRANDNUM){
-	randidx_3=0;
-	rng_fill_neglog(rng, logrand3, MAXRANDNUM);
-      }
+      Photon.Step = rng.get_neg_log() * ThreadMedOptic[Photon.Cur_Med].IMUAMUS;
 
       // check whether the photon will move out of the tetrahedron.
 
@@ -1596,29 +1532,24 @@ void * ThreadPhotonPropagation(void * threadid){
 	}
 	// 3> ---------------------------------------------------------------------------------------
 	if(OtherMed==Photon.Cur_Med || OtherRefIdx == ThreadMedOptic[Photon.Cur_Med].RefIdx){
-	  // no reflection or refraction 
+	  // no reflection or refraction
 	  if(IsBTriangle){
-	    int Time_Type;
 	    if(g_TimeDomain){
-	      Time_Type = (unsigned int)floor(Photon.Path*g_InvLightSpeedMutTimeStep);
+	      int Time_Type = (unsigned int)floor(Photon.Path*g_InvLightSpeedMutTimeStep);
 	      if(Time_Type >= g_NumTimeStep){goto Label_NewPhoton;}
 	      Time_Type = (Time_Type<<1)+1;
+	      int Curr_Idx = -g_Elems[Photon.Cur_Elem].AdjElemIdx[MinPos_Idx];
+	      if(Curr_Idx == PhotonInfo[PhotonInfo_Idx].Idx && Time_Type == PhotonInfo[PhotonInfo_Idx].Time_Type){
+	        PhotonInfo[PhotonInfo_Idx].LostWeight += Photon.Weight;
+	      }else{
+	        PhotonInfo_Idx++;
+	        PhotonInfo[PhotonInfo_Idx].Time_Type = Time_Type;
+	        PhotonInfo[PhotonInfo_Idx].Idx = Curr_Idx;
+	        PhotonInfo[PhotonInfo_Idx].LostWeight = Photon.Weight;
+	      }
+	      if(PhotonInfo_Idx >= Thread_ArraySize) SaveLocal2Global(PhotonInfo, PhotonInfo_Idx);
 	    }else{
-	      Time_Type = 1;
-	    }
-	    int Curr_Idx = -g_Elems[Photon.Cur_Elem].AdjElemIdx[MinPos_Idx]; 
-	    if(Curr_Idx == PhotonInfo[PhotonInfo_Idx].Idx &&
-	       Time_Type == PhotonInfo[PhotonInfo_Idx].Time_Type){
-	      PhotonInfo[PhotonInfo_Idx].LostWeight+=Photon.Weight;
-	    }else{
-	      PhotonInfo_Idx++;
-	      PhotonInfo[PhotonInfo_Idx].Time_Type = Time_Type;
-	      PhotonInfo[PhotonInfo_Idx].Idx = Curr_Idx;
-	      PhotonInfo[PhotonInfo_Idx].LostWeight = Photon.Weight;
-	    }
-
-	    if(PhotonInfo_Idx>=Thread_ArraySize){
-	      SaveLocal2Global(PhotonInfo, PhotonInfo_Idx);
+	      LocalSurfMeas[-g_Elems[Photon.Cur_Elem].AdjElemIdx[MinPos_Idx]] += Photon.Weight;
 	    }
 	    break;
 	  }else{
@@ -1633,9 +1564,9 @@ void * ThreadPhotonPropagation(void * threadid){
 	  // 4> ---------------------------------------------------------------------------------------
 	  double cosa, sina, cosb, sinb;
 
-	  NX = g_Elems[Photon.Cur_Elem].TriNorm[MinPos_Idx*4];
-	  NY = g_Elems[Photon.Cur_Elem].TriNorm[MinPos_Idx*4+1];
-	  NZ = g_Elems[Photon.Cur_Elem].TriNorm[MinPos_Idx*4+2];
+	  NX = g_Elems[Photon.Cur_Elem].TriNorm[MinPos_Idx   ];
+	  NY = g_Elems[Photon.Cur_Elem].TriNorm[MinPos_Idx+ 4];
+	  NZ = g_Elems[Photon.Cur_Elem].TriNorm[MinPos_Idx+ 8];
 	  cosa = -MinCos;  //	  cosa = -(UX*NX + UY*NY + UZ*NZ);
 	  
 	  if(cosa>G_COS_0_D){
@@ -1664,11 +1595,7 @@ void * ThreadPhotonPropagation(void * threadid){
 	    }
 	  }
 	  //	  cerr << "RefPercentage: " << RefPercentage << endl;
-	  temp = randnums1[randidx_1++];
-	  if(randidx_1>=MAXRANDNUM){
-	    randidx_1=0;
-	    rng_fill_uniform(rng, randnums1, MAXRANDNUM, 0.0, 1.0);
-	  }
+	  temp = rng.get_uniform();
 	  
 	  if (temp <= RefPercentage){
 	    // Reflection
@@ -1683,28 +1610,22 @@ void * ThreadPhotonPropagation(void * threadid){
 	  }else{
 	    // Transmit
 	    if(IsBTriangle){
-	      // ThreadSurfMeas[g_Elems[Photon.Cur_Elem].TriInfo[MinPos_Idx].BoundaryIdx]+=Weight;
-	      int Time_Type;
 	      if(g_TimeDomain){
-		Time_Type = (unsigned int)floor(Photon.Path*g_InvLightSpeedMutTimeStep);
+		int Time_Type = (unsigned int)floor(Photon.Path*g_InvLightSpeedMutTimeStep);
 		if(Time_Type >= g_NumTimeStep){goto Label_NewPhoton;}
 		Time_Type = (Time_Type<<1)+1;
+		int Curr_Idx = -g_Elems[Photon.Cur_Elem].AdjElemIdx[MinPos_Idx];
+		if(Curr_Idx == PhotonInfo[PhotonInfo_Idx].Idx && Time_Type == PhotonInfo[PhotonInfo_Idx].Time_Type){
+		  PhotonInfo[PhotonInfo_Idx].LostWeight += Photon.Weight;
+		}else{
+		  PhotonInfo_Idx++;
+		  PhotonInfo[PhotonInfo_Idx].Time_Type = Time_Type;
+		  PhotonInfo[PhotonInfo_Idx].Idx = Curr_Idx;
+		  PhotonInfo[PhotonInfo_Idx].LostWeight = Photon.Weight;
+		}
+		if(PhotonInfo_Idx >= Thread_ArraySize) SaveLocal2Global(PhotonInfo, PhotonInfo_Idx);
 	      }else{
-		Time_Type = 1;
-	      }
-	      int Curr_Idx = -g_Elems[Photon.Cur_Elem].AdjElemIdx[MinPos_Idx];
-	      if(Curr_Idx == PhotonInfo[PhotonInfo_Idx].Idx &&
-		 Time_Type == PhotonInfo[PhotonInfo_Idx].Time_Type){
-		PhotonInfo[PhotonInfo_Idx].LostWeight+=Photon.Weight;
-	      }else{
-		PhotonInfo_Idx++;
-		PhotonInfo[PhotonInfo_Idx].Time_Type = Time_Type;
-		PhotonInfo[PhotonInfo_Idx].Idx = Curr_Idx;
-		PhotonInfo[PhotonInfo_Idx].LostWeight = Photon.Weight;
-	      }
-
-	      if(PhotonInfo_Idx>=Thread_ArraySize){
-		SaveLocal2Global(PhotonInfo, PhotonInfo_Idx);
+		LocalSurfMeas[-g_Elems[Photon.Cur_Elem].AdjElemIdx[MinPos_Idx]] += Photon.Weight;
 	      }
 	      break;
 	    }else{
@@ -1745,71 +1666,64 @@ void * ThreadPhotonPropagation(void * threadid){
       // reduce the weight of the photon
       temp = ThreadMedOptic[Photon.Cur_Med].pdwa*Photon.Weight;
 
-      int Time_Type;
       if(g_TimeDomain){
-	Time_Type = (unsigned int)floor(Photon.Path*g_InvLightSpeedMutTimeStep);
+	int Time_Type = (unsigned int)floor(Photon.Path*g_InvLightSpeedMutTimeStep);
 	if(Time_Type >= g_NumTimeStep){goto Label_NewPhoton;}
 	Time_Type = (Time_Type<<1);
+	int Curr_Idx = Photon.Cur_Elem;
+	if(Curr_Idx == PhotonInfo[PhotonInfo_Idx].Idx && Time_Type == PhotonInfo[PhotonInfo_Idx].Time_Type){
+	  PhotonInfo[PhotonInfo_Idx].LostWeight += temp;
+	}else{
+	  PhotonInfo_Idx++;
+	  PhotonInfo[PhotonInfo_Idx].Time_Type = Time_Type;
+	  PhotonInfo[PhotonInfo_Idx].Idx = Curr_Idx;
+	  PhotonInfo[PhotonInfo_Idx].LostWeight = temp;
+	}
+	if(PhotonInfo_Idx >= Thread_ArraySize) SaveLocal2Global(PhotonInfo, PhotonInfo_Idx);
       }else{
-	Time_Type = 0;
+	LocalAbsorption[Photon.Cur_Elem] += temp;
       }
-      int Curr_Idx = Photon.Cur_Elem;
-      if(Curr_Idx == PhotonInfo[PhotonInfo_Idx].Idx &&
-	 Time_Type == PhotonInfo[PhotonInfo_Idx].Time_Type){
-	PhotonInfo[PhotonInfo_Idx].LostWeight+=temp;
-      }else{
-	PhotonInfo_Idx++;
-	PhotonInfo[PhotonInfo_Idx].Time_Type = Time_Type;
-	PhotonInfo[PhotonInfo_Idx].Idx = Curr_Idx;
-	PhotonInfo[PhotonInfo_Idx].LostWeight = temp;
-       }
-
-      if(PhotonInfo_Idx>=Thread_ArraySize){
-	SaveLocal2Global(PhotonInfo, PhotonInfo_Idx);
-      }
-#ifdef NOPUREGLASS      
-      Photon.Weight -= temp;	
+#ifdef NOPUREGLASS
+      Photon.Weight -= temp;
 #else
       if(ThreadMedOptic[Photon.Cur_Med].g<1){
-        Photon.Weight -= temp;	
+        Photon.Weight -= temp;
       }
 #endif
 
-      if (Photon.Weight <=0.00001){
-	if((rand()%1000)<100){
-	  Photon.Weight = 10*Photon.Weight;
-	}else{
-	  break;
-	}
+      if(Photon.Weight <= 0.00001){
+        if(rng.get_uniform() < 0.1){
+          Photon.Weight *= 10;
+        }else{
+          break;
+        }
       }
 
       // now start scattering the photon
       // For more information on the scattering, please ref to the original MCML paper/manual.
 
-      ScatterPhoton(Photon, ThreadMedOptic[Photon.Cur_Med].g, randidx_5, psi_sincos, randnums5, psi_sin, psi_cos, rng);
+      ScatterPhoton(Photon, ThreadMedOptic[Photon.Cur_Med].g, rng);
 
     }while(true);
   }while(true);
 
-  // Now we need to store the result back to the main program
-  if(PhotonInfo_Idx>0){
-    SaveLocal2Global(PhotonInfo, PhotonInfo_Idx);
+  // Flush time-domain buffer; for non-time-domain, merge local accumulators under one lock
+  if(g_TimeDomain){
+    if(PhotonInfo_Idx > 0) SaveLocal2Global(PhotonInfo, PhotonInfo_Idx);
+  }else{
+    os_unfair_lock_lock(&Result_Lock);
+    for(int i = 1; i <= g_NumElem;          i++) g_Absorption[i] += LocalAbsorption[i];
+    for(int i = 1; i <= g_NumBoundaryTrig;  i++) g_SurfMeas[i]   += LocalSurfMeas[i];
+    os_unfair_lock_unlock(&Result_Lock);
   }
-
-  //  cerr << "NumSteps:         " << NumSteps << endl;
-  //  cerr << "NumIntersections: " << NumIntersections << endl;
   g_NumIntersections += NumIntersections;
-  g_NumSteps += NumSteps;
+  g_NumSteps         += NumSteps;
 
-  delete [] randnums_xyz;
-  delete [] randnums1;
-  delete [] logrand3;
-  delete [] randnums5;
-  delete [] psi_sin;
-  delete [] psi_cos;
-  delete [] psi_sincos;
-  delete [] ThreadMedOptic;
-  delete [] PhotonInfo;
+  delete[] randnums_xyz;
+  delete[] ThreadMedOptic;
+  delete[] LocalAbsorption;
+  delete[] LocalSurfMeas;
+  if(PhotonInfo) delete[] PhotonInfo;
 
   return (void *) NULL;
 }
@@ -2486,12 +2400,6 @@ int main(int argc, char *argv[])
   }
 
   //  cerr << optical_filename << " " << fem_filename << " " << source_filename << endl;
-  // ----------------------------------------------------------------------
-  // Inital pthread lock
-  // ----------------------------------------------------------------------
-  pthread_mutex_init(&Result_Lock, NULL);
-  pthread_mutex_init(&Source_Lock, NULL);
-
   double StartTime = GetCurrentTime();
 
   g_NumIntersections = 0;
@@ -2499,18 +2407,13 @@ int main(int argc, char *argv[])
   g_SimedPhoton = 0;
 
   // ----------------------------------------------------------------------
-  // Start Simulation 
+  // Start Simulation
   // ----------------------------------------------------------------------
   pthread_t thread_id[g_NumThread];
-  int status, * p_status = &status;
-
-  for (int i=0; i<g_NumThread; i++){
-    pthread_create(&thread_id[i], NULL, ThreadPhotonPropagation, (void *) i);
-  }
-
-  for (int tid=0; tid<g_NumThread; tid++){
-    pthread_join(thread_id[tid], (void **) p_status);
-  }
+  for(int i = 0; i < g_NumThread; i++)
+    pthread_create(&thread_id[i], NULL, ThreadPhotonPropagation, (void *)(uintptr_t)i);
+  for(int i = 0; i < g_NumThread; i++)
+    pthread_join(thread_id[i], NULL);
   
 
   // ----------------------------------------------------------------------

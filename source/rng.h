@@ -61,7 +61,7 @@ private:
 // Phase D.9: Batched RNG Pool. 
 class RngPool {
 public:
-    static constexpr int SIZE = 8192;
+    static constexpr int SIZE = 4096;
 
     explicit RngPool(uint64_t seed_value) {
 #ifdef HAS_ACCELERATE
