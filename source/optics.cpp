@@ -5,64 +5,54 @@
 
 using namespace std;
 
-int ReadOpticalParameter(const std::string& filename,
-                         bool&       simpleOptic,
-                         int&        numMed,
-                         int&        uniformBoundary,
-                         double&     envRefIdx,
-                         TMedOptic*& medOptic){
+int ReadOpticalParameter(const std::string& filename, SimContext& ctx){
   ifstream fin(filename);
-  if(!fin.good()){
-    cerr << "\tCould not open file: " << filename << endl;
-    return -1;
-  }
+  if(!fin.good()){ cerr << "\tCould not open file: " << filename << "\n"; return -1; }
 
   int type;
   skip_comments(fin); fin >> type;
-  if     (type == 1){ cerr << "\tOptical parameter per region\n";  simpleOptic = true;  }
-  else if(type == 2){ cerr << "\tOptical parameter per element\n"; simpleOptic = false; }
+  if     (type==1){ cerr<<"\tOptical parameter per region\n";  ctx.simpleOptic=true;  }
+  else if(type==2){ cerr<<"\tOptical parameter per element\n"; ctx.simpleOptic=false; }
 
-  skip_comments(fin); fin >> numMed;
-  medOptic = new TMedOptic[numMed+1];
+  skip_comments(fin); fin >> ctx.numMed;
+  ctx.medOptic = new TMedOptic[ctx.numMed+1];
 
-  for(int i = 1; i <= numMed; i++){
+  for(int i = 1; i <= ctx.numMed; i++){
     skip_comments(fin);
-    fin >> medOptic[i].mua >> medOptic[i].mus >> medOptic[i].g >> medOptic[i].RefIdx;
+    fin >> ctx.medOptic[i].mua >> ctx.medOptic[i].mus
+        >> ctx.medOptic[i].g   >> ctx.medOptic[i].RefIdx;
 
-    if(medOptic[i].mua < 0 || medOptic[i].mus < 0){
-      cerr << "\tmua and mus must be >= 0.\n"; return -1;
+    if(ctx.medOptic[i].mua<0 || ctx.medOptic[i].mus<0){
+      cerr<<"\tmua and mus must be >= 0.\n"; return -1;
     }
-    if(medOptic[i].g < 0 || medOptic[i].g > 1){
-      cerr << "\tg must be in [0, 1].\n"; return -1;
+    if(ctx.medOptic[i].g<0 || ctx.medOptic[i].g>1){
+      cerr<<"\tg must be in [0,1].\n"; return -1;
     }
-    if(medOptic[i].RefIdx < 1){
-      cerr << "\tRefractive index must be >= 1.\n"; return -1;
+    if(ctx.medOptic[i].RefIdx<1){
+      cerr<<"\tRefractive index must be >= 1.\n"; return -1;
     }
-    if(medOptic[i].mua < 1e-10 && medOptic[i].mus < 1e-10){
-      cerr << "\tmua and mus cannot both be zero. "
-              "For glass, set g=1 and mua/mus to small non-zero values.\n";
-      return -1;
+    if(ctx.medOptic[i].mua<1e-10 && ctx.medOptic[i].mus<1e-10){
+      cerr<<"\tmua and mus cannot both be zero.\n"; return -1;
     }
-
-    double g = medOptic[i].g;
-    medOptic[i].OneMinsGG = 1.0 - g*g;
-    medOptic[i].OneMinsG  = 1.0 - g;
-    medOptic[i].OneAddGG  = 1.0 + g*g;
-    medOptic[i].OneAddG   = 1.0 + g;
-    medOptic[i].TwoG      = 2.0 * g;
-    medOptic[i].MUAMUS    = medOptic[i].mua + medOptic[i].mus;
-    medOptic[i].IMUAMUS   = 1.0 / medOptic[i].MUAMUS;
-    medOptic[i].pdwa      = medOptic[i].mua / medOptic[i].MUAMUS;
+    double g = ctx.medOptic[i].g;
+    ctx.medOptic[i].OneMinsGG = 1.0-g*g;
+    ctx.medOptic[i].OneMinsG  = 1.0-g;
+    ctx.medOptic[i].OneAddGG  = 1.0+g*g;
+    ctx.medOptic[i].OneAddG   = 1.0+g;
+    ctx.medOptic[i].TwoG      = 2.0*g;
+    ctx.medOptic[i].MUAMUS    = ctx.medOptic[i].mua + ctx.medOptic[i].mus;
+    ctx.medOptic[i].IMUAMUS   = 1.0/ctx.medOptic[i].MUAMUS;
+    ctx.medOptic[i].pdwa      = ctx.medOptic[i].mua/ctx.medOptic[i].MUAMUS;
   }
 
   skip_comments(fin); fin >> type;
-  if(type == 1){
-    cerr << "\tUniform environment refractive index.\n";
-    uniformBoundary = 0;
-    skip_comments(fin); fin >> envRefIdx;
-  }else if(type == 2){
-    cerr << "\tMatched boundary (no reflection).\n";
-    uniformBoundary = 1;
+  if(type==1){
+    cerr<<"\tUniform environment refractive index.\n";
+    ctx.uniformBoundary = 0;
+    skip_comments(fin); fin >> ctx.envRefIdx;
+  }else if(type==2){
+    cerr<<"\tMatched boundary (no reflection).\n";
+    ctx.uniformBoundary = 1;
   }
   return 0;
 }

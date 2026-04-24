@@ -1,4 +1,7 @@
 #pragma once
+#include "simcontext.h"
 
-// Main photon-propagation thread function (pthread-compatible signature).
-void* ThreadPhotonPropagation(void* threadid);
+// Thread payload: tid is the thread index; ctx is the shared simulation state.
+struct ThreadArg { int tid; SimContext* ctx; };
+
+void* ThreadPhotonPropagation(void* arg);

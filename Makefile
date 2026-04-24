@@ -1,8 +1,7 @@
 CXX    = clang++
 TARGET = source/timos
 
-SRCS = source/globals.cpp \
-       source/mesh.cpp \
+SRCS = source/mesh.cpp \
        source/optics.cpp \
        source/source_io.cpp \
        source/simulation.cpp \

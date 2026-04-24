@@ -1,18 +1,7 @@
 #pragma once
-#include "timos.h"
+#include "simcontext.h"
 #include <string>
 
-long long int ReadSource(const std::string& filename,
-                         int&      numSource,
-                         TSource*& sources);
+long long int ReadSource(const std::string& filename, SimContext& ctx);
 
-int Prepare_Source(int&        numNode,
-                   int&        numElem,
-                   int&        numTrig,
-                   int&        numSource,
-                   TSource*&   sources,
-                   TElem*&     elems,
-                   TNode*&     nodes,
-                   TElemNode*& elemNodes,
-                   TTriNode*&  triNodes,
-                   TTriangle*& triangles);
+int Prepare_Source(SimContext& ctx);

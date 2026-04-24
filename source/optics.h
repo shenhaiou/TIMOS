@@ -1,10 +1,5 @@
 #pragma once
-#include "timos.h"
+#include "simcontext.h"
 #include <string>
 
-int ReadOpticalParameter(const std::string& filename,
-                         bool&       simpleOptic,
-                         int&        numMed,
-                         int&        uniformBoundary,
-                         double&     envRefIdx,
-                         TMedOptic*& medOptic);
+int ReadOpticalParameter(const std::string& filename, SimContext& ctx);

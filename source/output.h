@@ -1,71 +1,22 @@
 #pragma once
-#include "timos.h"
+#include "simcontext.h"
 #include <string>
-#include <vector>
 
-void AbsorptionToFluence(int            numElem,
-                         int            numBoundaryTrig,
-                         long long int  TotalPhoton,
-                         double         sufThreshhold,
-                         double         intThreshhold,
-                         TTriNode*      triNodes,
-                         TMedOptic*     medOptic,
-                         int*           boundaryTrigs,
-                         TElem*         Elems,
-                         TElemNode*     ElemNodes,
-                         double*        SurfMeas,
-                         double*        Absorption);
+// sufThreshhold / intThreshhold are set by these functions (output params).
+void AbsorptionToFluence(SimContext& ctx,
+                         double& sufThreshhold, double& intThreshhold);
 
-void TimeAbsorptionToFluence(int            numElem,
-                             int            numBoundaryTrig,
-                             int            NumTimeStep,
-                             long long int  TotalPhoton,
-                             double         sufThreshhold,
-                             double         intThreshhold,
-                             TTriNode*      triNodes,
-                             TMedOptic*     medOptic,
-                             int*           boundaryTrigs,
-                             TElem*         Elems,
-                             TElemNode*     ElemNodes,
-                             std::vector<std::vector<double>>& TimeSurfMeas,
-                             std::vector<std::vector<double>>& TimeAbsorption);
+void TimeAbsorptionToFluence(SimContext& ctx,
+                             double& sufThreshhold, double& intThreshhold);
 
-bool WriteResultASCII(const std::string& optical_filename,
-                      const std::string& fem_filename,
-                      const std::string& source_filename,
-                      const std::string& output_filename,
-                      long long int  TotalPhoton,
-                      int            NumThread,
-                      int            StartRandIdx,
-                      double         sufThreshhold,
-                      double         intThreshhold,
-                      int            numElem,
-                      int            numBoundaryTrig,
-                      TTriNode*      triNodes,
-                      int*           boundaryTrigs,
-                      TElem*         Elems,
-                      TElemNode*     ElemNodes,
-                      double*        SurfMeas,
-                      double*        Absorption,
-                      int            output_format);
+bool WriteResultASCII(const std::string& opt_f, const std::string& fem_f,
+                      const std::string& src_f, const std::string& out_f,
+                      SimContext& ctx,
+                      double sufThreshhold, double intThreshhold,
+                      int output_format);
 
-bool TimeWriteResultASCII(const std::string& optical_filename,
-                          const std::string& fem_filename,
-                          const std::string& source_filename,
-                          const std::string& output_filename,
-                          int            NumTimeStep,
-                          double         TimeStep,
-                          long long int  TotalPhoton,
-                          int            NumThread,
-                          int            StartRandIdx,
-                          double         sufThreshhold,
-                          double         intThreshhold,
-                          int            numElem,
-                          int            numBoundaryTrig,
-                          TTriNode*      triNodes,
-                          int*           boundaryTrigs,
-                          TElem*         Elems,
-                          TElemNode*     ElemNodes,
-                          std::vector<std::vector<double>>& TimeSurfMeas,
-                          std::vector<std::vector<double>>& TimeAbsorption,
-                          int            output_format);
+bool TimeWriteResultASCII(const std::string& opt_f, const std::string& fem_f,
+                          const std::string& src_f, const std::string& out_f,
+                          SimContext& ctx,
+                          double sufThreshhold, double intThreshhold,
+                          int output_format);
