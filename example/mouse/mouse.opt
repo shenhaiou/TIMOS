@@ -1,21 +1,29 @@
+# TIMOS optical parameter file — mouse whole-body model (17 tissue regions)
+# All regions share g=0.9 and n=1.37.
+#
+# Line 1: mode  (1 = params per region,  2 = params per element)
 1
+# numMedia
 17
-0.23 10.00 0.9 1.37
-0.23 10.00 0.9 1.37
-0.11 11.00 0.9 1.37
-0.23 10.00 0.9 1.37
-0.21 17.00 0.9 1.37
-0.23 10.00 0.9 1.37
-0.12 12.00 0.9 1.37
-0.12 12.00 0.9 1.37
-0.35 23.00 0.9 1.37
-0.35 23.00 0.9 1.37
-0.23 10.00 0.9 1.37
-0.45 20.00 0.9 1.37
-0.23 10.00 0.9 1.37
-0.23 10.00 0.9 1.37
-0.23 10.00 0.9 1.37
-0.23 10.00 0.9 1.37
-0.23 10.00 0.9 1.37
+# mua(mm⁻¹)  mus(mm⁻¹)  g(-)   n(-)
+0.23          10.00      0.9    1.37   # region  1
+0.23          10.00      0.9    1.37   # region  2
+0.11          11.00      0.9    1.37   # region  3
+0.23          10.00      0.9    1.37   # region  4
+0.21          17.00      0.9    1.37   # region  5
+0.23          10.00      0.9    1.37   # region  6
+0.12          12.00      0.9    1.37   # region  7
+0.12          12.00      0.9    1.37   # region  8
+0.35          23.00      0.9    1.37   # region  9
+0.35          23.00      0.9    1.37   # region 10
+0.23          10.00      0.9    1.37   # region 11
+0.45          20.00      0.9    1.37   # region 12
+0.23          10.00      0.9    1.37   # region 13
+0.23          10.00      0.9    1.37   # region 14
+0.23          10.00      0.9    1.37   # region 15
+0.23          10.00      0.9    1.37   # region 16
+0.23          10.00      0.9    1.37   # region 17
+# boundaryFlag  (1 = uniform env refractive index,  2 = matched — no reflection)
 1
+# envRefractiveIndex (used when boundaryFlag == 1)
 1.0

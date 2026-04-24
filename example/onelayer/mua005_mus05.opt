@@ -1,5 +1,12 @@
+# TIMOS optical parameter file — one homogeneous layer
+#
+# Line 1: mode  (1 = params per region,  2 = params per element)
 1
-1					
-0.05 5 0.9  1.46
+# numMedia
 1
+# mua(mm⁻¹)  mus(mm⁻¹)  g(-)   n(-)
+0.05          5.0        0.9    1.46
+# boundaryFlag  (1 = uniform env refractive index,  2 = matched — no reflection)
+1
+# envRefractiveIndex (used when boundaryFlag == 1)
 1.0

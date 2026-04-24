@@ -1,3 +1,10 @@
+# TIMOS source file — surface triangle illumination of half-sphere lens
+# 887 surface triangles, each illuminated with equal photon count.
+#
+# Format:
+#   numSources
+#   12  n1 n2 n3  numPhotons   (type 12 = surface triangle; light enters normal to triangle)
+#
 887
 12 913 914 26539 14794
 12 913 975 26570 14364

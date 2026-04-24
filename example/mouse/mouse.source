@@ -1,3 +1,11 @@
+# TIMOS source file — mouse whole-body isotropic region sources
+# 436 illuminated elements, photon counts proportional to element volume.
+#
+# Format:
+#   numSources
+#   2  elemIdx  numPhotons   (type 2 = isotropic region source)
+#
+# numSources
 436
 2 4460 62597
 2 6579 26506

@@ -1,2 +1,16 @@
+# TIMOS source file — isotropic point source inside 5-medium cube
+#
+# Format:
+#   numSources
+#   sourceType [fields] numPhotons
+#
+# Source types:
+#   1   x(mm) y(mm) z(mm)                        numPhotons  — isotropic point
+#   2   elemIdx                                   numPhotons  — isotropic region
+#   11  elemIdx  x(mm) y(mm) z(mm)  dx dy dz      numPhotons  — pencil beam
+#   12  n1 n2 n3                                  numPhotons  — surface triangle (one entry per triangle)
+#
+# numSources
 1
-1 0.3 1.31 1.333 10000000
+# type  x(mm)  y(mm)  z(mm)  numPhotons
+1       0.3    1.31   1.333  10000000

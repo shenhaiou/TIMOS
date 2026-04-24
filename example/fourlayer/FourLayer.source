@@ -1,2 +1,16 @@
+# TIMOS source file — pencil beam on four-layer phantom
+#
+# Format:
+#   numSources
+#   sourceType [fields] numPhotons
+#
+# Source types:
+#   1   x(mm) y(mm) z(mm)                        numPhotons  — isotropic point
+#   2   elemIdx                                   numPhotons  — isotropic region
+#   11  elemIdx  x(mm) y(mm) z(mm)  dx dy dz      numPhotons  — pencil beam
+#   12  n1 n2 n3                                  numPhotons  — surface triangle (one entry per triangle)
+#
+# numSources
 1
-11 4537 0 0 0 0 0 1 10000000
+# type  elemIdx  pos(mm)      dir(unit vec)  numPhotons
+11      4537     0 0 0        0 0 1          10000000

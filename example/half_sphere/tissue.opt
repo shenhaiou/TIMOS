@@ -1,6 +1,13 @@
+# TIMOS optical parameter file — half-sphere lens in tissue
+# Media: tissue + air + glass lens. g=1 marks pure glass (weight not reduced).
+#
+# Line 1: mode  (1 = params per region,  2 = params per element)
 1
+# numMedia
 3
-0.050 10  0.9 1.3600
-0.001 1   1   1.0003
-0.001 1   1   1.4580
+# mua(mm⁻¹)  mus(mm⁻¹)  g(-)   n(-)
+0.050         10.0       0.9    1.3600   # tissue
+0.001         1.0        1.0    1.0003   # air
+0.001         1.0        1.0    1.4580   # glass lens (n_glass ≈ 1.458)
+# boundaryFlag  (1 = uniform env refractive index,  2 = matched — no reflection)
 2
