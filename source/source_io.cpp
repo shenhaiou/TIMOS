@@ -64,22 +64,22 @@ int Prepare_Source(SimContext& ctx){
         h[0]=ctx.elems[e].TriNorm[0]*ctx.sources[i].Position.X
             +ctx.elems[e].TriNorm[4]*ctx.sources[i].Position.Y
             +ctx.elems[e].TriNorm[8]*ctx.sources[i].Position.Z+ctx.elems[e].TriNorm[12];
-        if(h[0]<0) goto L_Skip;
+        if(h[0]<0) continue;
         if(h[0]<minH) minH=h[0];
         h[1]=ctx.elems[e].TriNorm[1]*ctx.sources[i].Position.X
             +ctx.elems[e].TriNorm[5]*ctx.sources[i].Position.Y
             +ctx.elems[e].TriNorm[9]*ctx.sources[i].Position.Z+ctx.elems[e].TriNorm[13];
-        if(h[1]<0) goto L_Skip;
+        if(h[1]<0) continue;
         if(h[1]<minH) minH=h[1];
         h[2]=ctx.elems[e].TriNorm[2]*ctx.sources[i].Position.X
             +ctx.elems[e].TriNorm[6]*ctx.sources[i].Position.Y
             +ctx.elems[e].TriNorm[10]*ctx.sources[i].Position.Z+ctx.elems[e].TriNorm[14];
-        if(h[2]<0) goto L_Skip;
+        if(h[2]<0) continue;
         if(h[2]<minH) minH=h[2];
         h[3]=ctx.elems[e].TriNorm[3]*ctx.sources[i].Position.X
             +ctx.elems[e].TriNorm[7]*ctx.sources[i].Position.Y
             +ctx.elems[e].TriNorm[11]*ctx.sources[i].Position.Z+ctx.elems[e].TriNorm[15];
-        if(h[3]<0) goto L_Skip;
+        if(h[3]<0) continue;
         if(h[3]<minH) minH=h[3];
         ctx.sources[i].ElemIdx = e;
         if(minH < 1e-6){
@@ -94,7 +94,6 @@ int Prepare_Source(SimContext& ctx){
           else{ ctx.sources[i].Position.X+=1e-6*DX; ctx.sources[i].Position.Y+=1e-6*DY; ctx.sources[i].Position.Z+=1e-6*DZ; }
         }
         break;
-      L_Skip:;
       }
       if(ctx.sources[i].ElemIdx <= 0){
         cerr<<"\tSource "<<i+1<<" not within phantom.\n";
