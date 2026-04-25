@@ -440,28 +440,30 @@ void* ThreadPhotonPropagation(void* varg){
   int         tid = arg->tid;
   SimContext& ctx = *arg->ctx;
 
-  double* LocalAbs  = new double[ctx.numElem+1]();
-  double* LocalSurf = new double[ctx.numBoundaryTrig+1]();
+  std::vector<double> LocalAbs(ctx.numElem+1, 0.0);
+  std::vector<double> LocalSurf(ctx.numBoundaryTrig+1, 0.0);
 
-  TPhotonInfo* PInfo = ctx.timeDomain ? new TPhotonInfo[TD_FLUSH_SIZE+4] : nullptr;
-  int          PIdx  = 0;
-  if(ctx.timeDomain) PInfo[0].Idx = -1;
+  std::vector<TPhotonInfo> PInfo;
+  if(ctx.timeDomain){
+    PInfo.assign(TD_FLUSH_SIZE+4, TPhotonInfo{0,0,0.0});
+    PInfo[0].Idx = -1;
+  }
+  int PIdx = 0;
 
-  double* xyz   = new double[RNG_BUF_XYZ3+6];
+  std::vector<double> xyz(RNG_BUF_XYZ3+6);
   int     Idx_U = 0;
 
   uint64_t ss = ((uint64_t)(tid+ctx.startRandIdx)*0x9E3779B97F4A7C15ULL) ^ (uint64_t)time(nullptr);
   uint64_t sa = timos::splitmix64(ss), sb = timos::splitmix64(ss);
   timos::RngPool      rng(sa);
   timos::Xoshiro256ss rng_init(sb);
-  rng_fill_uniform(rng_init, xyz, RNG_BUF_XYZ3+6, -1.0, 1.0);
+  rng_fill_uniform(rng_init, xyz.data(), RNG_BUF_XYZ3+6, -1.0, 1.0);
 
   TSource   ThreadSrc; ThreadSrc.NumPhoton = 0;
   TPhoton   p;
   long long nSteps = 0, nIsect = 0;
 
-  TMedOptic* med = new TMedOptic[ctx.numMed+1];
-  for(int i = 0; i <= ctx.numMed; i++) med[i] = ctx.medOptic[i];
+  std::vector<TMedOptic> med = ctx.medOptic; // vector copy
 
   // ---- Photon loop: each iteration is one complete photon lifetime
   for(;;){
@@ -477,20 +479,20 @@ void* ThreadPhotonPropagation(void* varg){
     // Initialise photon according to source type
     switch(ThreadSrc.SourceType){
     case 11: InitPencil  (p, ThreadSrc, ctx);               break;
-    case 12: InitTriangle(p, ThreadSrc, xyz, Idx_U, rng_init, ctx); break;
-    case  1: InitPoint   (p, ThreadSrc, xyz, Idx_U, rng_init, ctx); break;
-    case  2: InitRegion  (p, ThreadSrc, xyz, Idx_U, rng_init, ctx); break;
+    case 12: InitTriangle(p, ThreadSrc, xyz.data(), Idx_U, rng_init, ctx); break;
+    case  1: InitPoint   (p, ThreadSrc, xyz.data(), Idx_U, rng_init, ctx); break;
+    case  2: InitRegion  (p, ThreadSrc, xyz.data(), Idx_U, rng_init, ctx); break;
     default: continue; // unknown source type — skip
     }
 
     // Propagate until photon exits, is killed, or exceeds time window
-    propagate_photon(p, med, ctx, LocalAbs, LocalSurf, PInfo, PIdx, rng, nSteps, nIsect);
+    propagate_photon(p, med.data(), ctx, LocalAbs.data(), LocalSurf.data(), PInfo.data(), PIdx, rng, nSteps, nIsect);
     // PropResult::Abandon and PropResult::Done are both "start next photon"
   }
 
   // Merge per-thread accumulators into global arrays
   if(ctx.timeDomain){
-    if(PIdx > 0) SaveLocal2Global(PInfo, PIdx, ctx);
+    if(PIdx > 0) SaveLocal2Global(PInfo.data(), PIdx, ctx);
   }else{
     os_unfair_lock_lock(&Result_Lock);
     for(int i=1; i<=ctx.numElem;         i++) ctx.absorption[i] += LocalAbs[i];
@@ -500,7 +502,5 @@ void* ThreadPhotonPropagation(void* varg){
   ctx.numIntersections += nIsect;
   ctx.numSteps         += nSteps;
 
-  delete[] xyz; delete[] med; delete[] LocalAbs; delete[] LocalSurf;
-  if(PInfo) delete[] PInfo;
   return nullptr;
 }
