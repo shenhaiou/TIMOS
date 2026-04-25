@@ -23,7 +23,13 @@ PROF_ARGS = -f example/onelayer/one_layer_18_18_1_2.mesh \
             -p example/onelayer/mua005_mus05.opt \
             -m is -o /tmp/timos_profile_out.dat -t 10
 
-.PHONY: all release pgo clean
+TESTFLAGS = -O1 -std=c++23 -Isource -DHAS_ACCELERATE -framework Accelerate
+TESTS     = tests/test_mesh tests/test_optics tests/test_integration
+# All modules except main.cpp (each test provides its own main)
+LIB_SRCS  = source/mesh.cpp source/optics.cpp source/source_io.cpp \
+             source/simulation.cpp source/output.cpp
+
+.PHONY: all release pgo clean test
 
 all: release
 
@@ -41,5 +47,21 @@ pgo: $(SRCS)
 	$(CXX) $(CXXFLAGS) -flto -fprofile-instr-use=$(PROF_DATA) -o $(TARGET) $(SRCS)
 	@echo "=== Done: $(TARGET) ==="
 
+test: $(TESTS)
+	@echo "=== Running tests (from project root) ==="
+	./tests/test_mesh
+	./tests/test_optics
+	./tests/test_integration
+	@echo "=== All tests passed ==="
+
+tests/test_mesh: tests/test_mesh.cpp $(LIB_SRCS)
+	$(CXX) $(TESTFLAGS) -o $@ $^
+
+tests/test_optics: tests/test_optics.cpp $(LIB_SRCS)
+	$(CXX) $(TESTFLAGS) -o $@ $^
+
+tests/test_integration: tests/test_integration.cpp $(LIB_SRCS)
+	$(CXX) $(TESTFLAGS) -o $@ $^
+
 clean:
-	rm -f $(TARGET) $(PROF_EXE) $(PROF_RAW) $(PROF_DATA)
+	rm -f $(TARGET) $(PROF_EXE) $(PROF_RAW) $(PROF_DATA) $(TESTS)
