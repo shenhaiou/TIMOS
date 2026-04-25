@@ -109,7 +109,7 @@ def main():
             return np.log10(d + 1e-18) if args.log else d
 
     v_max = np.nanmax(get_step_data(num_steps//4 if num_steps>1 else 0))
-    v_min = v_max - 8 if args.log else 0
+    v_min = v_max - 4 if args.log else 0
 
     plotter = pv.Plotter(off_screen=True if args.output else False)
     d0 = get_step_data(0)
