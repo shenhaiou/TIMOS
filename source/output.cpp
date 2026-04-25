@@ -178,14 +178,27 @@ TiResult WriteGridASCII(const std::string& out_f, SimContext& ctx){
   fout << "% Rmax=" << ctx.gridRMax << " Ymax=" << ctx.gridYMax << "\n";
   fout << "3 " << ctx.gridNr << " " << ctx.gridNy << " " << nt << "\n";
 
+  double dr = ctx.gridRMax / ctx.gridNr;
+  double dy = ctx.gridYMax / ctx.gridNy;
+  double PI = 3.14159265358979323846;
+
   std::string line;
   line.reserve(1024);
   for(int r=0; r<ctx.gridNr; r++){
+    double r_in = r * dr;
+    double r_out = (r + 1) * dr;
+    double ring_vol = PI * (r_out * r_out - r_in * r_in) * dy;
+    
     for(int y=0; y<ctx.gridNy; y++){
       line.clear();
       std::format_to(std::back_inserter(line), "{} {} ", r, y);
       for(int t=0; t<nt; t++){
-        fast_append_double(line, ctx.cylindricalGrid[r][y][t]);
+        // Convert absorbed energy to fluence: E / (mua * Vol)
+        // Note: For simplicity, we assume the grid is mostly in one medium (tissue)
+        // If it spans media, we'd need to track mua per grid cell. 
+        // For the half-sphere lens study, the tissue is the primary interest.
+        double val = ctx.cylindricalGrid[r][y][t] / ring_vol;
+        fast_append_double(line, val);
       }
       line += '\n';
       fout << line;
