@@ -202,14 +202,12 @@ static inline void Intersect(double& MinPos, int& MinPos_Idx, double& MinCos,
   double t2=vgetq_lane_f64(t23,0),h2=vgetq_lane_f64(h23,0);if(t2<0){double s=-h2/t2;if(s<MinPos){MinCos=t2;MinPos=s;MinPos_Idx=2;}}
   double t3=vgetq_lane_f64(t23,1),h3=vgetq_lane_f64(h23,1);if(t3<0){double s=-h3/t3;if(s<MinPos){MinCos=t3;MinPos=s;MinPos_Idx=3;}}
 #else
-  double TT[4];
-  TT[0]=Norm[0]*p.UX+Norm[1]*p.UY+Norm[2]*p.UZ;
-  TT[1]=Norm[4]*p.UX+Norm[5]*p.UY+Norm[6]*p.UZ;
-  TT[2]=Norm[8]*p.UX+Norm[9]*p.UY+Norm[10]*p.UZ;
-  TT[3]=Norm[12]*p.UX+Norm[13]*p.UY+Norm[14]*p.UZ;
-  for(int i=0;i<=3;i++) if(TT[i]<0){
-    double h=Norm[i*4]*p.X+Norm[i*4+1]*p.Y+Norm[i*4+2]*p.Z+Norm[i*4+3];
-    double s=-h/TT[i]; if(s<MinPos){MinCos=TT[i];MinPos=s;MinPos_Idx=i;}
+  for(int i=0;i<=3;i++){
+    double tt = Norm[i]*p.UX + Norm[i+4]*p.UY + Norm[i+8]*p.UZ;
+    if(tt < 0){
+      double h = Norm[i]*p.X + Norm[i+4]*p.Y + Norm[i+8]*p.Z + Norm[i+12];
+      double s = -h/tt; if(s < MinPos){ MinCos=tt; MinPos=s; MinPos_Idx=i; }
+    }
   }
 #endif
 }
