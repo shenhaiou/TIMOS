@@ -15,7 +15,7 @@ TiResult ReadOpticalParameter(const std::string& filename, SimContext& ctx){
   else if(type==2){ cerr<<"\tOptical parameter per element\n"; ctx.simpleOptic=false; }
 
   skip_comments(fin); fin >> ctx.numMed;
-  ctx.medOptic = new TMedOptic[ctx.numMed+1];
+  ctx.medOptic.resize(ctx.numMed+1);
 
   for(int i = 1; i <= ctx.numMed; i++){
     skip_comments(fin);

@@ -28,8 +28,8 @@ int main(){
   assert(Prepare_Source(ctx));
 
   // Allocate result arrays
-  ctx.surfMeas   = new double[ctx.numBoundaryTrig+1]();
-  ctx.absorption = new double[ctx.numElem+1]();
+  ctx.surfMeas  .assign(ctx.numBoundaryTrig+1, 0.0);
+  ctx.absorption.assign(ctx.numElem+1,         0.0);
   ctx.numIntersections = 0; ctx.numSteps = 0; ctx.simedPhoton = 0;
 
   // Run with 4 threads

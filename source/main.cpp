@@ -140,8 +140,8 @@ int main(int argc, char* argv[]){
 
   // Allocate result arrays
   if(!ctx.timeDomain){
-    ctx.surfMeas   = new double[ctx.numBoundaryTrig+1]();
-    ctx.absorption = new double[ctx.numElem+1]();
+    ctx.surfMeas  .assign(ctx.numBoundaryTrig+1, 0.0);
+    ctx.absorption.assign(ctx.numElem+1,         0.0);
   }else{
     ctx.timeSurfMeas  .assign(ctx.numBoundaryTrig+1,vector<double>(ctx.numTimeStep,0.0));
     ctx.timeAbsorption.assign(ctx.numElem+1,         vector<double>(ctx.numTimeStep,0.0));
@@ -178,6 +178,6 @@ int main(int argc, char* argv[]){
   if(!wr){ cerr<<"Write failed: "<<wr.error()<<"\n"; return -1; }
 
   cerr<<"Done\n------------------------------------------------\n";
-  // ctx destructor frees all heap arrays
+  // ctx goes out of scope here; all std::vector members free automatically.
   return 0;
 }

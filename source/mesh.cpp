@@ -31,9 +31,9 @@ TiResult fem_read(const std::string& filename, SimContext& ctx){
   }
   cerr << "\tNum Node: " << ctx.numNode << "\n\tNum Elem: " << ctx.numElem << "\n";
 
-  ctx.nodes     = new TNode    [ctx.numNode+1]();
-  ctx.elemNodes = new TElemNode[ctx.numElem+1]();
-  ctx.elems     = new TElem    [ctx.numElem+1];
+  ctx.nodes.assign(ctx.numNode+1, TNode{});
+  ctx.elemNodes.assign(ctx.numElem+1, TElemNode{});
+  ctx.elems.resize(ctx.numElem+1);
   for(int i = 0; i <= ctx.numElem; i++)
     ctx.elemNodes[i].T[0] = ctx.elemNodes[i].T[1] = ctx.elemNodes[i].T[2] = ctx.elemNodes[i].T[3] = 0;
 
@@ -113,9 +113,9 @@ TiResult PreProcessor(SimContext& ctx){
   ctx.numBoundaryTrig = numBT;
   cerr << "\tNum_Trig: " << ctx.numTrig << "\n";
 
-  ctx.triNodes      = new TTriNode  [ctx.numTrig+1];
-  ctx.triangles     = new TTriangle [ctx.numTrig+1];
-  ctx.boundaryTrigs = new int       [ctx.numBoundaryTrig+1];
+  ctx.triNodes.resize(ctx.numTrig+1);
+  ctx.triangles.resize(ctx.numTrig+1);
+  ctx.boundaryTrigs.resize(ctx.numBoundaryTrig+1);
 
   int tempBT = 0;
   for(int p = 0; p < ctx.numTrig; p++){

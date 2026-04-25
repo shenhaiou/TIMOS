@@ -16,7 +16,7 @@ std::expected<long long int, std::string> ReadSource(const std::string& filename
   skip_comments(fin); fin >> ctx.numSource; curLine++;
   if(fin.fail()) cerr<<"Error in source file at line "<<curLine<<"\n";
 
-  ctx.sources = new TSource[ctx.numSource];
+  ctx.sources.resize(ctx.numSource);
   for(int i = 0; i < ctx.numSource; i++){
     curLine++;
     skip_comments(fin); fin >> ctx.sources[i].SourceType;
@@ -48,7 +48,7 @@ std::expected<long long int, std::string> ReadSource(const std::string& filename
 TiResult Prepare_Source(SimContext& ctx){
   cerr << "Begin check source\n";
 
-  int* nodeTriStart = new int[ctx.numNode+1]();
+  std::vector<int> nodeTriStart(ctx.numNode+1, 0);
   for(int i = 1; i <= ctx.numTrig; i++)
     if(nodeTriStart[ctx.triNodes[i].N[0]] == 0)
       nodeTriStart[ctx.triNodes[i].N[0]] = i;
@@ -97,7 +97,7 @@ TiResult Prepare_Source(SimContext& ctx){
       }
       if(ctx.sources[i].ElemIdx <= 0){
         cerr<<"\tSource "<<i+1<<" not within phantom.\n";
-        delete[] nodeTriStart; return std::unexpected("error");
+        return std::unexpected("error");
       }
 
     }else if(ctx.sources[i].SourceType == 12){
@@ -111,8 +111,8 @@ TiResult Prepare_Source(SimContext& ctx){
       for(int j=nodeTriStart[s0]; j<nodeTriStart[s0+1]; j++)
         if(ctx.sources[i].SurfTriNodes[1]==ctx.triNodes[j].N[1] &&
            ctx.sources[i].SurfTriNodes[2]==ctx.triNodes[j].N[2]){ tIdx=j; break; }
-      if(tIdx==-1){ cerr<<"\tWrong source 1\n"; delete[] nodeTriStart; return std::unexpected("error"); }
-      if(ctx.triangles[tIdx].Num_Elem==2){ cerr<<"\tWrong source 2\n"; delete[] nodeTriStart; return std::unexpected("error"); }
+      if(tIdx==-1){ cerr<<"\tWrong source 1\n"; return std::unexpected("error"); }
+      if(ctx.triangles[tIdx].Num_Elem==2){ cerr<<"\tWrong source 2\n"; return std::unexpected("error"); }
 
       ctx.sources[i].SurfTriIdx = tIdx;
       int e = ctx.sources[i].ElemIdx = ctx.triangles[tIdx].ElemIdx[0];
@@ -130,6 +130,5 @@ TiResult Prepare_Source(SimContext& ctx){
     }
   }
   cerr << "End check source\n";
-  delete[] nodeTriStart;
-  return {};
+    return {};
 }

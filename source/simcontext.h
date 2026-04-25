@@ -1,7 +1,7 @@
 #pragma once
-// SimContext holds all simulation state that was previously global (g_* variables).
-// Pass by reference through all functions; eliminates global mutable state.
-// Phase 4 will migrate raw pointer arrays to std::vector (0-indexed).
+// SimContext holds all simulation state.
+// Arrays are std::vector<T> sized n+1 and accessed 1-indexed (index 0 unused).
+// RAII: no manual delete[] required anywhere.
 
 #include "timos.h"
 #include "constants.h"
@@ -9,13 +9,13 @@
 #include <vector>
 #include <string>
 
-// Canonical result type for I/O functions: success = std::expected<void,std::string>{}
-// Failure = std::unexpected("human-readable message").
+// Canonical result type for I/O functions.
+// Success: TiResult{}   Failure: std::unexpected("message")
 using TiResult = std::expected<void, std::string>;
 
 struct SimContext {
   // ------- Time-domain settings -------
-  double timeStep                 = 0.1;    // ns
+  double timeStep                 = 0.1;
   double invTimeStep              = 10.0;
   double invLightSpeedMutTimeStep = INV_LIGHT_SPEED * 10.0;
   int    numTimeStep              = 50;
@@ -38,9 +38,9 @@ struct SimContext {
   int internalResultFormat = 0;
 
   // ------- Optics -------
-  double     envRefIdx = 1.0;
-  int        numMed    = 0;
-  TMedOptic* medOptic  = nullptr;
+  double                envRefIdx = 1.0;
+  int                   numMed    = 0;
+  std::vector<TMedOptic> medOptic;  // size numMed+1, 1-indexed
 
   // ------- Mesh counts -------
   int numNode         = 0;
@@ -48,44 +48,37 @@ struct SimContext {
   int numTrig         = 0;
   int numBoundaryTrig = 0;
 
-  // ------- Mesh arrays (1-indexed, raw pointers — Phase 4 will replace with vector) -------
-  TNode*     nodes        = nullptr;
-  TTriNode*  triNodes     = nullptr;
-  TElemNode* elemNodes    = nullptr;
-  TElem*     elems        = nullptr;
-  int*       boundaryTrigs= nullptr;
-  TTriangle* triangles    = nullptr;
+  // ------- Mesh arrays: size n+1, accessed 1-indexed (index 0 unused) -------
+  std::vector<TNode>     nodes;
+  std::vector<TTriNode>  triNodes;
+  std::vector<TElemNode> elemNodes;
+  std::vector<TElem>     elems;
+  std::vector<int>       boundaryTrigs;
+  std::vector<TTriangle> triangles;
 
-  // ------- CW result arrays (1-indexed) -------
-  double* surfMeas   = nullptr;
-  double* absorption = nullptr;
+  // ------- CW result arrays: size n+1, 1-indexed -------
+  std::vector<double> surfMeas;
+  std::vector<double> absorption;
 
   // ------- Time-domain result arrays -------
   std::vector<std::vector<double>> timeSurfMeas;
   std::vector<std::vector<double>> timeAbsorption;
 
-  // ------- Sources -------
-  int      numSource = 0;
-  TSource* sources   = nullptr;
-  int      sourceIdx = 0;          // protected by Source_Lock in simulation.cpp
+  // ------- Sources: size numSource, 0-indexed -------
+  int                 numSource = 0;
+  std::vector<TSource> sources;
+  int                 sourceIdx = 0;
 
   // ------- Thread count -------
   int numThread = 1;
 
-  // ------- Photon counters (updated under Result_Lock) -------
+  // ------- Photon counters -------
   long long int simedPhoton = 0;
   long long int totalPhoton = 0;
 
-  // ------- Destructor: free all heap arrays -------
-  ~SimContext(){
-    delete[] sources;   delete[] medOptic;      delete[] boundaryTrigs;
-    delete[] elemNodes; delete[] elems;         delete[] nodes;
-    delete[] triNodes;  delete[] triangles;
-    delete[] surfMeas;  delete[] absorption;
-  }
-
-  // Non-copyable (owns raw pointers)
+  SimContext() = default;
+  // Vectors clean up automatically — no destructor needed.
+  // Non-copyable (large data, no copy semantics defined).
   SimContext(const SimContext&) = delete;
   SimContext& operator=(const SimContext&) = delete;
-  SimContext() = default;
 };
