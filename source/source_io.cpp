@@ -10,11 +10,11 @@ using namespace std;
 std::expected<long long int, std::string> ReadSource(const std::string& filename, SimContext& ctx){
   long long int total = 0;
   ifstream fin(filename);
-  if(!fin.good()){ cerr<<"\tCould not open file: "<<filename<<"\n"; return std::unexpected("error"); }
+  if(!fin.good()){ cout<<"\tCould not open file: "<<filename<<"\n"; return std::unexpected("error"); }
 
   int curLine = 0;
   skip_comments(fin); fin >> ctx.numSource; curLine++;
-  if(fin.fail()) cerr<<"Error in source file at line "<<curLine<<"\n";
+  if(fin.fail()) cout<<"Error in source file at line "<<curLine<<"\n";
 
   ctx.sources.resize(ctx.numSource);
   for(int i = 0; i < ctx.numSource; i++){
@@ -23,7 +23,7 @@ std::expected<long long int, std::string> ReadSource(const std::string& filename
     switch(ctx.sources[i].SourceType){
     case 1:
       fin >> ctx.sources[i].Position.X >> ctx.sources[i].Position.Y >> ctx.sources[i].Position.Z;
-      if(fin.fail()) cerr<<"Error in source file at line "<<curLine<<"\n";
+      if(fin.fail()) cout<<"Error in source file at line "<<curLine<<"\n";
       break;
     case 2:
       fin >> ctx.sources[i].ElemIdx;
@@ -37,7 +37,7 @@ std::expected<long long int, std::string> ReadSource(const std::string& filename
       fin >> ctx.sources[i].SurfTriNodes[0] >> ctx.sources[i].SurfTriNodes[1] >> ctx.sources[i].SurfTriNodes[2];
       break;
     default:
-      cerr<<"\tUnknown source type near line: "<<i+1<<"\n"; return std::unexpected("error");
+      cout<<"\tUnknown source type near line: "<<i+1<<"\n"; return std::unexpected("error");
     }
     skip_comments(fin); fin >> ctx.sources[i].NumPhoton;
     total += ctx.sources[i].NumPhoton;
@@ -46,7 +46,7 @@ std::expected<long long int, std::string> ReadSource(const std::string& filename
 }
 
 TiResult Prepare_Source(SimContext& ctx){
-  cerr << "Begin check source\n";
+  cout << "Begin check source\n";
 
   std::vector<int> nodeTriStart(ctx.numNode+1, 0);
   for(int i = 1; i <= ctx.numTrig; i++)
@@ -83,7 +83,7 @@ TiResult Prepare_Source(SimContext& ctx){
         if(h[3]<minH) minH=h[3];
         ctx.sources[i].ElemIdx = e;
         if(minH < 1e-6){
-          cerr<<"\tSource "<<i+1<<" too close to boundary of element "<<e<<"; nudging.\n";
+          cout<<"\tSource "<<i+1<<" too close to boundary of element "<<e<<"; nudging.\n";
           int* N = ctx.elemNodes[e].N;
           double CX=(ctx.nodes[N[0]].X+ctx.nodes[N[1]].X+ctx.nodes[N[2]].X+ctx.nodes[N[3]].X)/4.0;
           double CY=(ctx.nodes[N[0]].Y+ctx.nodes[N[1]].Y+ctx.nodes[N[2]].Y+ctx.nodes[N[3]].Y)/4.0;
@@ -96,7 +96,7 @@ TiResult Prepare_Source(SimContext& ctx){
         break;
       }
       if(ctx.sources[i].ElemIdx <= 0){
-        cerr<<"\tSource "<<i+1<<" not within phantom.\n";
+        cout<<"\tSource "<<i+1<<" not within phantom.\n";
         return std::unexpected("error");
       }
 
@@ -111,8 +111,8 @@ TiResult Prepare_Source(SimContext& ctx){
       for(int j=nodeTriStart[s0]; j<nodeTriStart[s0+1]; j++)
         if(ctx.sources[i].SurfTriNodes[1]==ctx.triNodes[j].N[1] &&
            ctx.sources[i].SurfTriNodes[2]==ctx.triNodes[j].N[2]){ tIdx=j; break; }
-      if(tIdx==-1){ cerr<<"\tWrong source 1\n"; return std::unexpected("error"); }
-      if(ctx.triangles[tIdx].Num_Elem==2){ cerr<<"\tWrong source 2\n"; return std::unexpected("error"); }
+      if(tIdx==-1){ cout<<"\tWrong source 1\n"; return std::unexpected("error"); }
+      if(ctx.triangles[tIdx].Num_Elem==2){ cout<<"\tWrong source 2\n"; return std::unexpected("error"); }
 
       ctx.sources[i].SurfTriIdx = tIdx;
       int e = ctx.sources[i].ElemIdx = ctx.triangles[tIdx].ElemIdx[0];
@@ -129,6 +129,6 @@ TiResult Prepare_Source(SimContext& ctx){
         { ctx.sources[i].IncAngle.X=ctx.elems[e].TriNorm[3]; ctx.sources[i].IncAngle.Y=ctx.elems[e].TriNorm[7]; ctx.sources[i].IncAngle.Z=ctx.elems[e].TriNorm[11]; }
     }
   }
-  cerr << "End check source\n";
+  cout << "End check source\n";
     return {};
 }

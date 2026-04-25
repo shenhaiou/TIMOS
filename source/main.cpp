@@ -11,75 +11,139 @@
 #include <filesystem>
 #include <thread>
 #include <vector>
+#include <getopt.h>    // POSIX getopt_long
 #include <sys/time.h>
 
 using namespace std;
 
+// --------------------------------------------------------------------- usage
 static void print_usage(){
-  cerr << "\nTIM-OS version 3.0\n"
-       << "Usage: timos -p opt_file -f mesh_file -s src_file -m [s|i|si] "
-          "-o out_file [-T dt steps] [-t threads] [-r start_rand]\n\n"
-       << "  -m s|i|si   output format: surface / internal / both\n"
-       << "  -T dt N     time-domain simulation: step dt (ns), N steps\n"
-       << "  -t N        thread count (default 1)\n"
-       << "  -r N        starting RNG stream index (default 1)\n\n"
-       << "All lengths in mm; optical coefficients in mm⁻¹.\n";
+  cout <<
+    "\nTIM-OS v3.0 — Tetrahedral-mesh Inhomogeneous Monte-Carlo Optical Simulator\n\n"
+    "Usage:\n"
+    "  timos -p OPT -f MESH -s SRC -m MODE -o OUT [options]\n\n"
+    "Required:\n"
+    "  -p, --optical FILE    optical parameter file (.opt)\n"
+    "  -f, --mesh    FILE    finite-element mesh file (.mesh)\n"
+    "  -s, --source  FILE    light source definition (.source)\n"
+    "  -m, --mode    MODE    output mode: s=surface, i=internal, si=both\n"
+    "  -o, --output  FILE    output filename (.dat)\n\n"
+    "Optional:\n"
+    "  -t, --threads N       number of threads (default: 1)\n"
+    "  -r, --rand-start N    starting RNG stream index for distributed runs\n"
+    "                        (default: 1; max streams = 1024)\n"
+    "  -T, --time-step DT    enable time-domain mode; DT = step size in ns\n"
+    "  -N, --num-steps N     number of time steps (required when -T is set)\n"
+    "  -h, --help            show this message\n\n"
+    "Notes:\n"
+    "  All lengths in mm; optical coefficients in mm^-1.\n"
+    "  For distributed runs across machines use non-overlapping -r values,\n"
+    "  e.g. machine 1: -r 1 -t 16 ; machine 2: -r 17 -t 16.\n\n";
 }
 
+// ---------------------------------------------------------------- file check
 static bool check_file(const std::string& p){
   std::error_code ec;
-  if(!std::filesystem::exists(p,ec)||ec){ cerr<<"No such file: "<<p<<"\n"; return false; }
-  if(!std::filesystem::is_regular_file(p,ec)||ec){ cerr<<"Not a regular file: "<<p<<"\n"; return false; }
+  if(!std::filesystem::exists(p,ec)||ec){ cout<<"No such file: "<<p<<"\n"; return false; }
+  if(!std::filesystem::is_regular_file(p,ec)||ec){ cout<<"Not a regular file: "<<p<<"\n"; return false; }
   return true;
 }
 
-static int flag_code(std::string_view s){
-  if(s.size()>=2&&s[0]=='-'){
-    switch(s[1]){ case 'p':return 1;case 'f':return 2;case 's':return 3;
-                  case 'm':return 4;case 'o':return 5;case 't':return 6;
-                  case 'r':return 7;case 'T':return 8; }
-  }
-  return -1;
-}
-
+// ------------------------------------------------------------ argument parser
+// Uses POSIX getopt_long so both short flags (-p) and long options (--optical)
+// are accepted. The non-standard -T flag takes a second positional argument
+// (num_steps) which is consumed from optind after getopt sees the DT value.
 static bool parse_argu(int argc, char* argv[],
-                        string& opt_f,string& fem_f,string& src_f,string& out_f,
+                        string& opt_f, string& fem_f,
+                        string& src_f, string& out_f,
                         int& fmt, SimContext& ctx){
-  int i=1;
-  bool hasOpt=false,hasFem=false,hasSrc=false,hasOut=false;
-  bool hasFmt=false,hasTh=false,hasRd=false;
-  while(i<argc){
-    switch(flag_code(argv[i])){
-    case 1: opt_f=argv[++i]; if(!check_file(opt_f))return false; hasOpt=true; break;
-    case 2: fem_f=argv[++i]; if(!check_file(fem_f))return false; hasFem=true; break;
-    case 3: src_f=argv[++i]; if(!check_file(src_f))return false; hasSrc=true; break;
-    case 4:{
-      std::string_view m=argv[++i];
-      if(m=="s")fmt=1; else if(m=="i")fmt=2; else if(m=="si"||m=="is")fmt=3;
-      else if(m=="t")fmt=4; else{ cerr<<"Unknown format '"<<m<<"'; using 's'.\n";fmt=1; }
+  // clang-format off
+  static const option long_opts[] = {
+    {"optical",    required_argument, nullptr, 'p'},
+    {"mesh",       required_argument, nullptr, 'f'},
+    {"source",     required_argument, nullptr, 's'},
+    {"mode",       required_argument, nullptr, 'm'},
+    {"output",     required_argument, nullptr, 'o'},
+    {"threads",    required_argument, nullptr, 't'},
+    {"rand-start", required_argument, nullptr, 'r'},
+    {"time-step",  required_argument, nullptr, 'T'},
+    {"num-steps",  required_argument, nullptr, 'N'},
+    {"help",       no_argument,       nullptr, 'h'},
+    {nullptr,      0,                 nullptr,  0 }
+  };
+  // clang-format on
+  static const char* short_opts = "p:f:s:m:o:t:r:T:N:h";
+
+  bool hasOpt=false, hasFem=false, hasSrc=false, hasOut=false;
+  bool hasFmt=false, hasTh=false,  hasRd=false;
+
+  int c;
+  while((c = getopt_long(argc, argv, short_opts, long_opts, nullptr)) != -1){
+    switch(c){
+    case 'p':
+      opt_f = optarg; if(!check_file(opt_f)) return false; hasOpt=true; break;
+    case 'f':
+      fem_f = optarg; if(!check_file(fem_f)) return false; hasFem=true; break;
+    case 's':
+      src_f = optarg; if(!check_file(src_f)) return false; hasSrc=true; break;
+    case 'm': {
+      std::string_view m = optarg;
+      if     (m=="s")            fmt=1;
+      else if(m=="i")            fmt=2;
+      else if(m=="si"||m=="is")  fmt=3;
+      else{ cout<<"Unknown mode '"<<m<<"'; using 's'.\n"; fmt=1; }
       hasFmt=true; break;
     }
-    case 5: out_f=argv[++i]; hasOut=true; break;
-    case 6: ctx.numThread=std::stoi(argv[++i]); if(ctx.numThread<=0||ctx.numThread>=1024)ctx.numThread=64; hasTh=true; break;
-    case 7: ctx.startRandIdx=std::stoi(argv[++i]); hasRd=true; break;
-    case 8:
-      ctx.timeDomain=true;
-      ctx.timeStep=std::stod(argv[++i]);
-      ctx.numTimeStep=std::stoi(argv[++i]);
-      if(ctx.numTimeStep<=1){ cerr<<"numTimeStep must be > 1.\n"; return false; }
-      ctx.invTimeStep=1.0/ctx.timeStep;
-      ctx.invLightSpeedMutTimeStep=INV_LIGHT_SPEED*ctx.invTimeStep;
+    case 'o':
+      out_f = optarg; hasOut=true; break;
+    case 't':
+      try {
+        ctx.numThread = std::stoi(optarg);
+      } catch (...) { cout << "Invalid thread count: " << optarg << "\n"; return false; }
+      if(ctx.numThread<=0||ctx.numThread>=1024) ctx.numThread=64;
+      hasTh=true; break;
+    case 'r':
+      try {
+        ctx.startRandIdx = std::stoi(optarg);
+      } catch (...) { cout << "Invalid random start index: " << optarg << "\n"; return false; }
+      hasRd=true; break;
+    case 'T':
+      // -T DT : enables time-domain, sets step size; -N must also be provided.
+      ctx.timeDomain = true;
+      try {
+        ctx.timeStep = std::stod(optarg);
+      } catch (...) { cout << "Invalid time step: " << optarg << "\n"; return false; }
+      ctx.invTimeStep = 1.0 / ctx.timeStep;
+      ctx.invLightSpeedMutTimeStep = INV_LIGHT_SPEED * ctx.invTimeStep;
+      // Legacy form: if next arg is a bare number (not a flag), treat it as
+      // num_steps to preserve backwards-compatibility with "-T dt N" usage.
+      if(optind < argc && argv[optind][0] != '-'){
+        try {
+          ctx.numTimeStep = std::stoi(argv[optind++]);
+        } catch (...) { optind--; } // backtrack if next arg wasn't a valid int
+      }
       break;
-    default: print_usage(); return false;
+    case 'N':
+      try {
+        ctx.numTimeStep = std::stoi(optarg);
+      } catch (...) { cout << "Invalid number of steps: " << optarg << "\n"; return false; }
+      break;
+    case 'h':
+      print_usage(); return false;
+    default:
+      print_usage(); return false;
     }
-    i++;
   }
+
   if(!hasOpt||!hasFem||!hasSrc||!hasOut){ print_usage(); return false; }
-  if(!hasTh)  ctx.numThread=1;
-  if(!hasFmt) fmt=1;
-  if(!hasRd)  ctx.startRandIdx=1;
-  else if(ctx.startRandIdx<=0||ctx.startRandIdx+ctx.numThread>1024){
-    cerr<<"startRandIdx out of range.\n"; return false;
+  if(!hasTh)  ctx.numThread    = 1;
+  if(!hasFmt) fmt              = 1;
+  if(!hasRd)  ctx.startRandIdx = 1;
+  else if(ctx.startRandIdx<=0 || ctx.startRandIdx+ctx.numThread>1024){
+    cout<<"startRandIdx out of range.\n"; return false;
+  }
+  if(ctx.timeDomain && ctx.numTimeStep<=1){
+    cout<<"--num-steps N must be > 1 for time-domain mode.\n"; return false;
   }
   return true;
 }
@@ -90,8 +154,8 @@ static double wall_time(){
 }
 
 int main(int argc, char* argv[]){
-  cerr<<"\n------------------------------------------------\n";
-  if(argc<9){ print_usage(); return -1; }
+  cout<<"\n------------------------------------------------\n";
+  if(argc<2){ print_usage(); return -1; }
 
   SimContext ctx;
   string opt_f,fem_f,src_f,out_f;
@@ -99,43 +163,45 @@ int main(int argc, char* argv[]){
 
   if(!parse_argu(argc,argv,opt_f,fem_f,src_f,out_f,fmt,ctx)) return -1;
 
-  cerr<<"Optical  filename: "<<opt_f<<"\n"
+  cout<<"Optical  filename: "<<opt_f<<"\n"
       <<"Fem data filename: "<<fem_f<<"\n"
       <<"Source   filename: "<<src_f<<"\n";
 
   // Lambda: report error and return -1 if TiResult holds an error
   auto check = [](TiResult r, const char* step) -> bool {
-    if(!r){ cerr << "Error in " << step << ": " << r.error() << "\n"; return false; }
+    if(!r){ cout << "Error in " << step << ": " << r.error() << "\n"; return false; }
     return true;
   };
 
-  cerr<<"Begin read optical parameters.\n";
+  cout<<"Begin read optical parameters.\n";
   if(!check(ReadOpticalParameter(opt_f,ctx),"ReadOpticalParameter")) return -1;
-  cerr<<"End read optical parameters.\n";
+  cout<<"End read optical parameters.\n";
 
-  cerr<<"Begin read finite element file.\n";
+  double mt0 = wall_time();
+  cout<<"Begin read finite element file.\n";
   if(!check(fem_read(fem_f,ctx),"fem_read")) return -1;
-  cerr<<"End read finite element file.\n";
+  cout<<"End read finite element file (" << wall_time()-mt0 << " sec).\n";
 
-  cerr<<"Begin Preprocessing the finite element mesh.\n";
+  double pt0 = wall_time();
+  cout<<"Begin Preprocessing the finite element mesh.\n";
   if(!check(PreProcessor(ctx),"PreProcessor")) return -1;
-  cerr<<"End Preprocessing the finite element mesh.\n";
+  cout<<"End Preprocessing the finite element mesh (" << wall_time()-pt0 << " sec).\n";
 
-  cerr<<"Begin read source file.\n";
+  cout<<"Begin read source file.\n";
   {
     auto src_result = ReadSource(src_f, ctx);
-    if(!src_result){ cerr<<"Error reading source: "<<src_result.error()<<"\n"; return -1; }
+    if(!src_result){ cout<<"Error reading source: "<<src_result.error()<<"\n"; return -1; }
     ctx.totalPhoton = *src_result;
   }
-  cerr<<"End read source file.\n";
-  if(ctx.totalPhoton<=0){ cerr<<"No photons in source file.\n"; return -1; }
+  cout<<"End read source file.\n";
+  if(ctx.totalPhoton<=0){ cout<<"No photons in source file.\n"; return -1; }
 
   if(!check(Prepare_Source(ctx),"Prepare_Source")) return -1;
 
-  cerr<<"       Num Photon: "<<ctx.totalPhoton<<"\n";
+  cout<<"       Num Photon: "<<ctx.totalPhoton<<"\n";
   if(ctx.timeDomain)
-    cerr<<"Time domain: dt="<<ctx.timeStep<<" ns, steps="<<ctx.numTimeStep<<"\n";
-  cerr<<"Output: "<<out_f<<"  format="<<fmt
+    cout<<"Time domain: dt="<<ctx.timeStep<<" ns, steps="<<ctx.numTimeStep<<"\n";
+  cout<<"Output: "<<out_f<<"  format="<<fmt
       <<"  threads="<<ctx.numThread<<"  startRand="<<ctx.startRandIdx<<"\n";
 
   // Allocate result arrays
@@ -150,7 +216,7 @@ int main(int argc, char* argv[]){
   ctx.numIntersections=0; ctx.numSteps=0; ctx.simedPhoton=0;
 
   // Launch threads via std::jthread — auto-joins on scope exit
-  double t0=wall_time();
+  double st0=wall_time();
   {
     std::vector<ThreadArg> args(ctx.numThread);
     std::vector<std::jthread> threads;
@@ -160,9 +226,9 @@ int main(int argc, char* argv[]){
       threads.emplace_back([&args,i]{ ThreadPhotonPropagation(&args[i]); });
     }
   }
-  double t1=wall_time();
+  double st1=wall_time();
 
-  cerr<<"Total simulation time: "<<t1-t0<<" sec\n"
+  cout<<"Total simulation time: "<<st1-st0<<" sec\n"
       <<"Num of Intersection:   "<<ctx.numIntersections<<"\n"
       <<"Num of Step:   "<<ctx.numSteps<<"\n"
       <<"Prepare output data:\n";
@@ -171,13 +237,15 @@ int main(int argc, char* argv[]){
   if(ctx.timeDomain) TimeAbsorptionToFluence(ctx,sufTh,intTh);
   else               AbsorptionToFluence    (ctx,sufTh,intTh);
 
-  cerr<<"Write output file\n";
+  double wt0 = wall_time();
+  cout<<"Write output file\n";
   TiResult wr = ctx.timeDomain
     ? TimeWriteResultASCII(opt_f,fem_f,src_f,out_f,ctx,sufTh,intTh,fmt)
     :      WriteResultASCII(opt_f,fem_f,src_f,out_f,ctx,sufTh,intTh,fmt);
-  if(!wr){ cerr<<"Write failed: "<<wr.error()<<"\n"; return -1; }
+  if(!wr){ cout<<"Write failed: "<<wr.error()<<"\n"; return -1; }
+  cout<<"End write output file (" << wall_time()-wt0 << " sec).\n";
 
-  cerr<<"Done\n------------------------------------------------\n";
+  cout<<"Done\n------------------------------------------------\n";
   // ctx goes out of scope here; all std::vector members free automatically.
   return 0;
 }

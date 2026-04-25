@@ -26,7 +26,7 @@ static void test_fem_read_onelayer(){
   for(int i = 1; i <= ctx.numElem; i++)
     assert(ctx.elems[i].MedIdx == 1 && "one-layer mesh: all elements in medium 1");
 
-  std::cerr << "PASS test_fem_read_onelayer\n";
+  std::cout << "PASS test_fem_read_onelayer\n";
 }
 
 static void test_preprocessor_onelayer(){
@@ -63,7 +63,7 @@ static void test_preprocessor_onelayer(){
     }
   }
 
-  std::cerr << "PASS test_preprocessor_onelayer  totalVol=" << totalVol << " mm³\n";
+  std::cout << "PASS test_preprocessor_onelayer  totalVol=" << totalVol << " mm³\n";
 }
 
 static void test_fem_read_bad_file(){
@@ -73,14 +73,14 @@ static void test_fem_read_bad_file(){
   auto r = fem_read("/nonexistent/path/file.mesh", ctx);
   assert(!r && "should fail on missing file");
   assert(!r.error().empty() && "error message should not be empty");
-  std::cerr << "PASS test_fem_read_bad_file\n";
+  std::cout << "PASS test_fem_read_bad_file\n";
 }
 
 int main(){
-  std::cerr << "--- test_mesh ---\n";
+  std::cout << "--- test_mesh ---\n";
   test_fem_read_onelayer();
   test_preprocessor_onelayer();
   test_fem_read_bad_file();
-  std::cerr << "All mesh tests passed.\n";
+  std::cout << "All mesh tests passed.\n";
   return 0;
 }

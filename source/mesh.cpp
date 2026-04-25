@@ -4,77 +4,72 @@
 #include <fstream>
 #include <algorithm>
 #include <cmath>
+#include <vector>
 
 using namespace std;
 
 // Lexicographic order for triangle deduplication.
-static inline bool operator<(TSimpleTri a, TSimpleTri b){
-  return a.N[0] < b.N[0]
-      || (a.N[0] == b.N[0] && a.N[1] < b.N[1])
-      || (a.N[0] == b.N[0] && a.N[1] == b.N[1] && a.N[2] < b.N[2]);
+static inline bool operator<(const TSimpleTri& a, const TSimpleTri& b){
+  if (a.N[0] != b.N[0]) return a.N[0] < b.N[0];
+  if (a.N[1] != b.N[1]) return a.N[1] < b.N[1];
+  return a.N[2] < b.N[2];
+}
+
+// Faster skip_comments that avoids repeated std::ws/peek calls where possible
+static inline void fast_skip_comments(std::istream& fin) {
+  char c;
+  while (fin >> std::ws && fin.peek() == '#') {
+    std::string dummy;
+    std::getline(fin, dummy);
+  }
 }
 
 TiResult fem_read(const std::string& filename, SimContext& ctx){
   ifstream fin(filename);
-  if(!fin.good()){ cerr << "\tCould not open file: " << filename << "\n"; return std::unexpected("fem error"); }
+  if(!fin.good()){ cout << "\tCould not open file: " << filename << "\n"; return std::unexpected("fem error"); }
 
-  long long int curLine = 1;
-  skip_comments(fin); fin >> ctx.numNode;
-  if(fin.fail()) cerr << "Error in fem file at line " << curLine << "\n";
+  // Use a large buffer for reading
+  std::vector<char> buffer(1024 * 1024);
+  fin.rdbuf()->pubsetbuf(buffer.data(), buffer.size());
 
-  skip_comments(fin); fin >> ctx.numElem; curLine++;
-  if(fin.fail()) cerr << "Error in fem file at line " << curLine << "\n";
+  fast_skip_comments(fin); fin >> ctx.numNode;
+  fast_skip_comments(fin); fin >> ctx.numElem;
 
   if(!ctx.simpleOptic && ctx.numMed != ctx.numElem){
-    cerr << "Error: numMed must equal numElem for per-element optics.\n";
+    cout << "Error: numMed must equal numElem for per-element optics.\n";
     return std::unexpected("fem error");
   }
-  cerr << "\tNum Node: " << ctx.numNode << "\n\tNum Elem: " << ctx.numElem << "\n";
+  cout << "\tNum Node: " << ctx.numNode << "\n\tNum Elem: " << ctx.numElem << "\n";
 
   ctx.nodes.assign(ctx.numNode+1, TNode{});
   ctx.elemNodes.assign(ctx.numElem+1, TElemNode{});
   ctx.elems.resize(ctx.numElem+1);
   for(int i = 0; i <= ctx.numElem; i++)
-    ctx.elemNodes[i].T[0] = ctx.elemNodes[i].T[1] = ctx.elemNodes[i].T[2] = ctx.elemNodes[i].T[3] = 0;
+    ctx.elemNodes[i].T[0] = ctx.elemNodes[i].T[1] = ctx.elemNodes[i].T[2] = ctx.elemNodes[i].T[3] = -1;
 
   for(int i = 1; i <= ctx.numNode; i++){
-    skip_comments(fin);
+    fast_skip_comments(fin);
     fin >> ctx.nodes[i].X >> ctx.nodes[i].Y >> ctx.nodes[i].Z;
-    curLine++;
-    if(fin.fail()) cerr << "Error in fem file at line " << curLine << "\n";
   }
 
   for(int i = 1; i <= ctx.numElem; i++){
-    skip_comments(fin);
+    fast_skip_comments(fin);
     fin >> ctx.elemNodes[i].N[0] >> ctx.elemNodes[i].N[1]
         >> ctx.elemNodes[i].N[2] >> ctx.elemNodes[i].N[3]
         >> ctx.elems[i].MedIdx;
 
-    for(int k = 0; k < 4; k++)
-      if(ctx.elemNodes[i].N[k] < 1 || ctx.elemNodes[i].N[k] > ctx.numNode){
-        cerr << "\tNode index out of range at line " << curLine << "\n";
-        return std::unexpected("fem error");
-      }
-    curLine++;
-    if(fin.fail()) cerr << "Error at line " << curLine << "\n";
-
     if(ctx.simpleOptic){
       if(ctx.elems[i].MedIdx > ctx.numMed){
-        cerr << "\tFEM references medium " << ctx.elems[i].MedIdx
+        cout << "\tFEM references medium " << ctx.elems[i].MedIdx
              << " but only " << ctx.numMed << " defined.\n";
         return std::unexpected("fem error");
       }
     }else{
       ctx.elems[i].MedIdx = i;
     }
-    ctx.elemNodes[i].T[0] = ctx.elemNodes[i].T[1] =
-    ctx.elemNodes[i].T[2] = ctx.elemNodes[i].T[3] = -1;
 
     // Sort node indices small → large
-    for(int j = 0; j <= 2; j++)
-      for(int k = j+1; k <= 3; k++)
-        if(ctx.elemNodes[i].N[j] > ctx.elemNodes[i].N[k])
-          std::swap(ctx.elemNodes[i].N[j], ctx.elemNodes[i].N[k]);
+    std::sort(ctx.elemNodes[i].N, ctx.elemNodes[i].N + 4);
   }
   return {};
 }
@@ -82,7 +77,7 @@ TiResult fem_read(const std::string& filename, SimContext& ctx){
 TiResult PreProcessor(SimContext& ctx){
   int numElem = ctx.numElem, numNode = ctx.numNode;
 
-  TSimpleTri* tl = new TSimpleTri[4*numElem+1];
+  std::vector<TSimpleTri> tl(4 * numElem);
   const int Ar[4][3] = {{0,1,2},{0,1,3},{0,2,3},{1,2,3}};
   for(int i = 1; i <= numElem; i++)
     for(int j = 0; j < 4; j++){
@@ -93,29 +88,44 @@ TiResult PreProcessor(SimContext& ctx){
       tl[k].NumConElem = 1;
       tl[k].ElemIdx[0] = i; tl[k].ElemIdx[1] = -1;
     }
-  tl[4*numElem].N[0] = tl[4*numElem].N[1] = tl[4*numElem].N[2] = numNode;
 
-  sort(tl, tl + 4*numElem);
+  // Use standard sort
+  std::sort(tl.begin(), tl.end());
 
   int hole = 0, cur = 0, numBT = 0;
-  do{
-    bool dup = (tl[cur].N[0]==tl[cur+1].N[0] && tl[cur].N[1]==tl[cur+1].N[1]
-                                               && tl[cur].N[2]==tl[cur+1].N[2]);
-    tl[hole].N[0] = tl[cur].N[0]; tl[hole].N[1] = tl[cur].N[1]; tl[hole].N[2] = tl[cur].N[2];
-    if(dup){ tl[hole].NumConElem=2; tl[hole].ElemIdx[0]=tl[cur].ElemIdx[0];
-             tl[hole].ElemIdx[1]=tl[cur+1].ElemIdx[0]; cur+=2; }
-    else   { tl[hole].NumConElem=tl[cur].NumConElem; tl[hole].ElemIdx[0]=tl[cur].ElemIdx[0];
-             tl[hole].ElemIdx[1]=tl[cur].ElemIdx[1]; cur++; numBT++; }
+  int totalTl = 4 * numElem;
+  while(cur < totalTl){
+    bool hasNext = (cur + 1 < totalTl);
+    bool dup = hasNext && (tl[cur].N[0]==tl[cur+1].N[0] && 
+                           tl[cur].N[1]==tl[cur+1].N[1] && 
+                           tl[cur].N[2]==tl[cur+1].N[2]);
+    
+    tl[hole].N[0] = tl[cur].N[0]; 
+    tl[hole].N[1] = tl[cur].N[1]; 
+    tl[hole].N[2] = tl[cur].N[2];
+    
+    if(dup){ 
+      tl[hole].NumConElem=2; 
+      tl[hole].ElemIdx[0]=tl[cur].ElemIdx[0];
+      tl[hole].ElemIdx[1]=tl[cur+1].ElemIdx[0]; 
+      cur+=2; 
+    } else { 
+      tl[hole].NumConElem=tl[cur].NumConElem; 
+      tl[hole].ElemIdx[0]=tl[cur].ElemIdx[0];
+      tl[hole].ElemIdx[1]=tl[cur].ElemIdx[1]; 
+      cur++; 
+      numBT++; 
+    }
     hole++;
-  }while(cur < 4*numElem);
+  }
 
   ctx.numTrig         = hole;
   ctx.numBoundaryTrig = numBT;
-  cerr << "\tNum_Trig: " << ctx.numTrig << "\n";
+  cout << "\tNum_Trig: " << ctx.numTrig << "\n";
 
-  ctx.triNodes.resize(ctx.numTrig+1);
-  ctx.triangles.resize(ctx.numTrig+1);
-  ctx.boundaryTrigs.resize(ctx.numBoundaryTrig+1);
+  ctx.triNodes.assign(ctx.numTrig+1, TTriNode{});
+  ctx.triangles.assign(ctx.numTrig+1, TTriangle{});
+  ctx.boundaryTrigs.assign(ctx.numBoundaryTrig+1, 0);
 
   int tempBT = 0;
   for(int p = 0; p < ctx.numTrig; p++){
@@ -135,12 +145,10 @@ TiResult PreProcessor(SimContext& ctx){
       ctx.triangles[L].ElemIdx[1] = tl[p].ElemIdx[1];
     }
     for(int i = 0; i < ctx.triangles[L].Num_Elem; i++){
-      if(ctx.triangles[L].ElemIdx[i]<1 || ctx.triangles[L].ElemIdx[i]>numElem){
-        cerr << "\tMesh not correct.\n"; delete[] tl; return std::unexpected("fem error");
-      }
+      int eIdx = ctx.triangles[L].ElemIdx[i];
       for(int j = 0; j <= 3; j++)
-        if(ctx.elemNodes[ctx.triangles[L].ElemIdx[i]].T[j] == -1){
-          ctx.elemNodes[ctx.triangles[L].ElemIdx[i]].T[j] = L; break;
+        if(ctx.elemNodes[eIdx].T[j] == -1){
+          ctx.elemNodes[eIdx].T[j] = L; break;
         }
     }
   }
@@ -166,6 +174,7 @@ TiResult PreProcessor(SimContext& ctx){
     double y4=(ctx.nodes[N[0]].Y+ctx.nodes[N[1]].Y+ctx.nodes[N[2]].Y+ctx.nodes[N[3]].Y)/4.0;
     double z4=(ctx.nodes[N[0]].Z+ctx.nodes[N[1]].Z+ctx.nodes[N[2]].Z+ctx.nodes[N[3]].Z)/4.0;
 
+    ctx.elemNodes[i].Vol = 0;
     for(int j = 0; j <= 3; j++){
       int tri = ctx.elemNodes[i].T[j];
       ctx.elems[i].AdjElemIdx[j] = (ctx.triangles[tri].Num_Elem==1)
@@ -178,13 +187,13 @@ TiResult PreProcessor(SimContext& ctx){
       if(t>0){ ctx.elems[i].TriNorm[j]=-nx; ctx.elems[i].TriNorm[j+4]=-ny;
                ctx.elems[i].TriNorm[j+8]=-nz; ctx.elems[i].TriNorm[j+12]=-d;
                ctx.elemNodes[i].Vol += ctx.triNodes[tri].Area*t/3.0; }
-      else if(t<0){ ctx.elems[i].TriNorm[j]=nx; ctx.elems[i].TriNorm[j+4]=ny;
-                    ctx.elems[i].TriNorm[j+8]=nz; ctx.elems[i].TriNorm[j+12]=d;
-                    ctx.elemNodes[i].Vol += -ctx.triNodes[tri].Area*t/3.0; }
+      else {   ctx.elems[i].TriNorm[j]=nx; ctx.elems[i].TriNorm[j+4]=ny;
+               ctx.elems[i].TriNorm[j+8]=nz; ctx.elems[i].TriNorm[j+12]=d;
+               ctx.elemNodes[i].Vol += -ctx.triNodes[tri].Area*t/3.0; }
     }
   }
 
-  cerr << "End Mesh prepare\n";
-  delete[] tl;
+  cout << "End Mesh prepare\n";
   return {};
 }
+

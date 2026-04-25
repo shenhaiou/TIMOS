@@ -7,12 +7,12 @@ using namespace std;
 
 TiResult ReadOpticalParameter(const std::string& filename, SimContext& ctx){
   ifstream fin(filename);
-  if(!fin.good()){ cerr << "\tCould not open file: " << filename << "\n"; return std::unexpected("error"); }
+  if(!fin.good()){ cout << "\tCould not open file: " << filename << "\n"; return std::unexpected("error"); }
 
   int type;
   skip_comments(fin); fin >> type;
-  if     (type==1){ cerr<<"\tOptical parameter per region\n";  ctx.simpleOptic=true;  }
-  else if(type==2){ cerr<<"\tOptical parameter per element\n"; ctx.simpleOptic=false; }
+  if     (type==1){ cout<<"\tOptical parameter per region\n";  ctx.simpleOptic=true;  }
+  else if(type==2){ cout<<"\tOptical parameter per element\n"; ctx.simpleOptic=false; }
 
   skip_comments(fin); fin >> ctx.numMed;
   ctx.medOptic.resize(ctx.numMed+1);
@@ -23,16 +23,16 @@ TiResult ReadOpticalParameter(const std::string& filename, SimContext& ctx){
         >> ctx.medOptic[i].g   >> ctx.medOptic[i].RefIdx;
 
     if(ctx.medOptic[i].mua<0 || ctx.medOptic[i].mus<0){
-      cerr<<"\tmua and mus must be >= 0.\n"; return std::unexpected("error");
+      cout<<"\tmua and mus must be >= 0.\n"; return std::unexpected("error");
     }
     if(ctx.medOptic[i].g<0 || ctx.medOptic[i].g>1){
-      cerr<<"\tg must be in [0,1].\n"; return std::unexpected("error");
+      cout<<"\tg must be in [0,1].\n"; return std::unexpected("error");
     }
     if(ctx.medOptic[i].RefIdx<1){
-      cerr<<"\tRefractive index must be >= 1.\n"; return std::unexpected("error");
+      cout<<"\tRefractive index must be >= 1.\n"; return std::unexpected("error");
     }
     if(ctx.medOptic[i].mua<1e-10 && ctx.medOptic[i].mus<1e-10){
-      cerr<<"\tmua and mus cannot both be zero.\n"; return std::unexpected("error");
+      cout<<"\tmua and mus cannot both be zero.\n"; return std::unexpected("error");
     }
     double g = ctx.medOptic[i].g;
     ctx.medOptic[i].OneMinsGG = 1.0-g*g;
@@ -47,11 +47,11 @@ TiResult ReadOpticalParameter(const std::string& filename, SimContext& ctx){
 
   skip_comments(fin); fin >> type;
   if(type==1){
-    cerr<<"\tUniform environment refractive index.\n";
+    cout<<"\tUniform environment refractive index.\n";
     ctx.uniformBoundary = 0;
     skip_comments(fin); fin >> ctx.envRefIdx;
   }else if(type==2){
-    cerr<<"\tMatched boundary (no reflection).\n";
+    cout<<"\tMatched boundary (no reflection).\n";
     ctx.uniformBoundary = 1;
   }
   return {};

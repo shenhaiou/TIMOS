@@ -30,7 +30,7 @@ static void test_read_onelayer_opt(){
   assert(std::fabs(m.RefIdx - 1.46) < 1e-9);
   check_derived(m);
 
-  std::cerr << "PASS test_read_onelayer_opt  pdwa=" << m.pdwa << "\n";
+  std::cout << "PASS test_read_onelayer_opt  pdwa=" << m.pdwa << "\n";
 }
 
 static void test_read_fourlayer_opt(){
@@ -39,7 +39,7 @@ static void test_read_fourlayer_opt(){
   assert(r);
   assert(ctx.numMed == 4);
   for(int i = 1; i <= ctx.numMed; i++) check_derived(ctx.medOptic[i]);
-  std::cerr << "PASS test_read_fourlayer_opt\n";
+  std::cout << "PASS test_read_fourlayer_opt\n";
 }
 
 static void test_read_mouse_opt(){
@@ -53,22 +53,22 @@ static void test_read_mouse_opt(){
     assert(ctx.medOptic[i].g >= 0.0 && ctx.medOptic[i].g <= 1.0);
     check_derived(ctx.medOptic[i]);
   }
-  std::cerr << "PASS test_read_mouse_opt  numMed=17\n";
+  std::cout << "PASS test_read_mouse_opt  numMed=17\n";
 }
 
 static void test_read_bad_opt(){
   SimContext ctx;
   auto r = ReadOpticalParameter("/no/such/file.opt", ctx);
   assert(!r && "should fail on missing file");
-  std::cerr << "PASS test_read_bad_opt\n";
+  std::cout << "PASS test_read_bad_opt\n";
 }
 
 int main(){
-  std::cerr << "--- test_optics ---\n";
+  std::cout << "--- test_optics ---\n";
   test_read_onelayer_opt();
   test_read_fourlayer_opt();
   test_read_mouse_opt();
   test_read_bad_opt();
-  std::cerr << "All optics tests passed.\n";
+  std::cout << "All optics tests passed.\n";
   return 0;
 }

@@ -2,12 +2,15 @@
 #include <iostream>
 #include <fstream>
 #include <algorithm>
+#include <format>
+#include <vector>
+#include <charconv>
 
 using namespace std;
 
 void AbsorptionToFluence(SimContext& ctx,
                          double& sufThreshhold, double& intThreshhold){
-  double* CAbs=new double[ctx.numElem+1]();
+  vector<double> CAbs(ctx.numElem + 1, 0.0);
   double total=0, maxSuf=0, maxInt=0;
   for(int i=1;i<=ctx.numBoundaryTrig;i++){
     ctx.surfMeas[i]/=ctx.triNodes[ctx.boundaryTrigs[i]].Area;
@@ -25,16 +28,15 @@ void AbsorptionToFluence(SimContext& ctx,
       if(ctx.absorption[i]>maxInt) maxInt=ctx.absorption[i];
     }
   }
-  sort(CAbs,CAbs+ctx.numElem+1);
-  for(int i=0;i<=ctx.numElem;i++) total+=CAbs[i];
-  cerr<<"Absorbed Fraction: "<<total/double(ctx.totalPhoton)<<"\n";
+  sort(CAbs.begin(), CAbs.end());
+  for(double v : CAbs) total += v;
+  cout<<"Absorbed Fraction: "<<total/double(ctx.totalPhoton)<<"\n";
   sufThreshhold=maxSuf/1e20; intThreshhold=maxInt/1e20;
-  delete[] CAbs;
 }
 
 void TimeAbsorptionToFluence(SimContext& ctx,
                              double& sufThreshhold, double& intThreshhold){
-  double* CAbs=new double[ctx.numElem+1]();
+  vector<double> CAbs(ctx.numElem + 1, 0.0);
   double total=0, maxSuf=0, maxInt=0;
   for(int i=1;i<=ctx.numBoundaryTrig;i++)
     for(int k=0;k<ctx.numTimeStep;k++){
@@ -52,42 +54,64 @@ void TimeAbsorptionToFluence(SimContext& ctx,
         if(ctx.timeAbsorption[i][k]>maxInt) maxInt=ctx.timeAbsorption[i][k];
       }
   }
-  sort(CAbs,CAbs+ctx.numElem+1);
-  for(int i=0;i<=ctx.numElem;i++) total+=CAbs[i];
-  cerr<<"Absorbed Fraction: "<<total/double(ctx.totalPhoton)<<"\n";
+  sort(CAbs.begin(), CAbs.end());
+  for(double v : CAbs) total += v;
+  cout<<"Absorbed Fraction: "<<total/double(ctx.totalPhoton)<<"\n";
   sufThreshhold=maxSuf/1e20; intThreshhold=maxInt/1e20;
-  delete[] CAbs;
+}
+
+static inline void fast_append_double(std::string& s, double val){
+  char buf[64];
+  auto [ptr, ec] = std::to_chars(buf, buf + sizeof(buf), val, std::chars_format::general, 6);
+  if (ec == std::errc()) {
+    s.append(buf, ptr - buf);
+  } else {
+    s += "0";
+  }
+  s += ' ';
 }
 
 TiResult WriteResultASCII(const std::string& opt_f,const std::string& fem_f,
                       const std::string& src_f,const std::string& out_f,
                       SimContext& ctx, double sufTh, double intTh, int fmt){
-  const std::string fb="/tmp/timos_tmp_result.dat";
   ofstream fout(out_f);
-  if(!fout.good()){ cerr<<"Cannot write to "<<out_f<<"; using "<<fb<<"\n"; fout.open(fb); if(!fout.good()) return std::unexpected("cannot open output file"); }
-  fout<<"% Optical filename:    "<<opt_f<<"\n"
-      <<"% Fem mesh filename:   "<<fem_f<<"\n"
-      <<"% Source filename:     "<<src_f<<"\n"
-      <<"%      Num Photon:     "<<ctx.totalPhoton<<"\n"
-      <<"% Num of threads:      "<<ctx.numThread<<"\n"
-      <<"% Start random stream: "<<ctx.startRandIdx<<"\n";
+  if(!fout.good()) return std::unexpected("cannot open output file");
+
+  std::vector<char> buffer(1024 * 1024);
+  fout.rdbuf()->pubsetbuf(buffer.data(), buffer.size());
+
+  fout << std::format("% Optical filename:    {}\n", opt_f)
+       << std::format("% Fem mesh filename:   {}\n", fem_f)
+       << std::format("% Source filename:     {}\n", src_f)
+       << std::format("%      Num Photon:     {}\n", ctx.totalPhoton)
+       << std::format("% Num of threads:      {}\n", ctx.numThread)
+       << std::format("% Start random stream: {}\n", ctx.startRandIdx);
+
+  std::string line;
+  line.reserve(1024);
+
   if(fmt==1||fmt==3){
-    fout<<"1 "<<ctx.numBoundaryTrig<<" 1\n";
+    fout << std::format("1 {} 1\n", ctx.numBoundaryTrig);
     for(int i=1;i<=ctx.numBoundaryTrig;i++){
-      fout<<ctx.triNodes[ctx.boundaryTrigs[i]].N[0]<<" \t"
-          <<ctx.triNodes[ctx.boundaryTrigs[i]].N[1]<<" \t"
-          <<ctx.triNodes[ctx.boundaryTrigs[i]].N[2]<<" \t"
-          <<ctx.triNodes[ctx.boundaryTrigs[i]].Area<<" \t"
-          <<(ctx.surfMeas[i]<sufTh?0.0:ctx.surfMeas[i])<<"\n";
+      const auto& t = ctx.triNodes[ctx.boundaryTrigs[i]];
+      double val = (ctx.surfMeas[i] < sufTh) ? 0.0 : ctx.surfMeas[i];
+      line.clear();
+      std::format_to(std::back_inserter(line), "{} {} {} {} ", t.N[0], t.N[1], t.N[2], t.Area);
+      fast_append_double(line, val);
+      line += '\n';
+      fout << line;
     }
   }
   if(fmt==2||fmt==3){
-    fout<<"2 "<<ctx.numElem<<" 1\n";
+    fout << std::format("2 {} 1\n", ctx.numElem);
     for(int i=1;i<=ctx.numElem;i++){
-      fout<<ctx.elemNodes[i].N[0]<<" \t"<<ctx.elemNodes[i].N[1]<<" \t"
-          <<ctx.elemNodes[i].N[2]<<" \t"<<ctx.elemNodes[i].N[3]<<" \t"
-          <<ctx.elemNodes[i].Vol<<" \t"
-          <<(ctx.absorption[i]<intTh?0.0:ctx.absorption[i])<<"\n";
+      const auto& e = ctx.elemNodes[i];
+      double val = (ctx.absorption[i] < intTh) ? 0.0 : ctx.absorption[i];
+      line.clear();
+      std::format_to(std::back_inserter(line), "{} {} {} {} {} ", e.N[0], e.N[1], e.N[2], e.N[3], e.Vol);
+      fast_append_double(line, val);
+      line += '\n';
+      fout << line;
     }
   }
   return {};
@@ -96,36 +120,52 @@ TiResult WriteResultASCII(const std::string& opt_f,const std::string& fem_f,
 TiResult TimeWriteResultASCII(const std::string& opt_f,const std::string& fem_f,
                           const std::string& src_f,const std::string& out_f,
                           SimContext& ctx, double sufTh, double intTh, int fmt){
-  const std::string fb="/tmp/timos_tmp_result.dat";
   ofstream fout(out_f);
-  if(!fout.good()){ cerr<<"Cannot write to "<<out_f<<"; using "<<fb<<"\n"; fout.open(fb); if(!fout.good()) return std::unexpected("cannot open output file"); }
-  fout<<"% Optical filename:    "<<opt_f<<"\n"
-      <<"% Fem mesh filename:   "<<fem_f<<"\n"
-      <<"% Source filename:     "<<src_f<<"\n"
-      <<"%      Num Photon:     "<<ctx.totalPhoton<<"\n"
-      <<"% Time domain. Step: "<<ctx.timeStep<<" ns, Steps: "<<ctx.numTimeStep<<"\n"
-      <<"% Num of threads:      "<<ctx.numThread<<"\n"
-      <<"% Start random stream: "<<ctx.startRandIdx<<"\n";
+  if(!fout.good()) return std::unexpected("cannot open output file");
+
+  std::vector<char> buffer(1024 * 1024);
+  fout.rdbuf()->pubsetbuf(buffer.data(), buffer.size());
+
+  fout << std::format("% Optical filename:    {}\n", opt_f)
+       << std::format("% Fem mesh filename:   {}\n", fem_f)
+       << std::format("% Source filename:     {}\n", src_f)
+       << std::format("%      Num Photon:     {}\n", ctx.totalPhoton)
+       << std::format("% Time domain. Step: {} ns, Steps: {}\n", ctx.timeStep, ctx.numTimeStep)
+       << std::format("% Num of threads:      {}\n", ctx.numThread)
+       << std::format("% Start random stream: {}\n", ctx.startRandIdx);
+
+  std::string line;
+  line.reserve(512 + 24 * ctx.numTimeStep);
+
   if(fmt==1||fmt==3){
-    fout<<"1 "<<ctx.numBoundaryTrig<<" "<<ctx.numTimeStep<<"\n";
+    fout << std::format("1 {} {}\n", ctx.numBoundaryTrig, ctx.numTimeStep);
     for(int i=1;i<=ctx.numBoundaryTrig;i++){
-      fout<<ctx.triNodes[ctx.boundaryTrigs[i]].N[0]<<" \t"
-          <<ctx.triNodes[ctx.boundaryTrigs[i]].N[1]<<" \t"
-          <<ctx.triNodes[ctx.boundaryTrigs[i]].N[2]<<" \t"
-          <<ctx.triNodes[ctx.boundaryTrigs[i]].Area<<" \t";
-      for(int j=0;j<ctx.numTimeStep;j++) fout<<(ctx.timeSurfMeas[i][j]<sufTh?0.0:ctx.timeSurfMeas[i][j])<<" \t";
-      fout<<"\n";
+      const auto& t = ctx.triNodes[ctx.boundaryTrigs[i]];
+      line.clear();
+      std::format_to(std::back_inserter(line), "{} {} {} {} ", t.N[0], t.N[1], t.N[2], t.Area);
+      for(int j=0;j<ctx.numTimeStep;j++){
+        double val = (ctx.timeSurfMeas[i][j] < sufTh) ? 0.0 : ctx.timeSurfMeas[i][j];
+        fast_append_double(line, val);
+      }
+      line += '\n';
+      fout << line;
     }
   }
   if(fmt==2||fmt==3){
-    fout<<"2 "<<ctx.numElem<<" "<<ctx.numTimeStep<<"\n";
+    fout << std::format("2 {} {}\n", ctx.numElem, ctx.numTimeStep);
     for(int i=1;i<=ctx.numElem;i++){
-      fout<<ctx.elemNodes[i].N[0]<<" \t"<<ctx.elemNodes[i].N[1]<<" \t"
-          <<ctx.elemNodes[i].N[2]<<" \t"<<ctx.elemNodes[i].N[3]<<" \t"
-          <<ctx.elemNodes[i].Vol<<" \t";
-      for(int j=0;j<ctx.numTimeStep;j++) fout<<(ctx.timeAbsorption[i][j]<intTh?0.0:ctx.timeAbsorption[i][j])<<" \t";
-      fout<<"\n";
+      const auto& e = ctx.elemNodes[i];
+      line.clear();
+      std::format_to(std::back_inserter(line), "{} {} {} {} {} ", e.N[0], e.N[1], e.N[2], e.N[3], e.Vol);
+      for(int j=0;j<ctx.numTimeStep;j++){
+        double val = (ctx.timeAbsorption[i][j] < intTh) ? 0.0 : ctx.timeAbsorption[i][j];
+        fast_append_double(line, val);
+      }
+      line += '\n';
+      fout << line;
     }
   }
   return {};
 }
+
+

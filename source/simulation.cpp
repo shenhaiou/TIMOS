@@ -42,7 +42,15 @@ static inline int Fetch_Source(TSource& dst, SimContext& ctx, int){
   return n;
 }
 
-// ----------------------------------------------------------------- Photon initializers
+// -----------------------------------------------------------------
+// Photon initializers
+// -----------------------------------------------------------------
+
+// Sample a uniformly random direction on the unit sphere using rejection
+// sampling inside the unit cube:  draw (x,y,z) in [-1,1]^3, reject if
+//   x^2 + y^2 + z^2 > 1,
+// then normalise to obtain a point on S^2.  This avoids trigonometric
+// calls and is unbiased (Marsaglia 1972).
 static inline void iso_dir(TPhoton& p, double* buf, int& idx, timos::Xoshiro256ss& rng){
   double t;
   do{
@@ -143,7 +151,38 @@ static inline bool record_surface(TPhoton& p, int btrig_idx,
   return true; // photon exited domain (always abandon after recording)
 }
 
-// ----------------------------------------------------------------- Intersection
+// -----------------------------------------------------------------
+// Ray–tetrahedron intersection
+// -----------------------------------------------------------------
+//
+// For a photon at position P = (x,y,z) moving in direction U = (ux,uy,uz),
+// find the smallest positive t at which the ray P + t·U crosses a face.
+//
+// Each face j has an inward unit normal \hat{n}_j = (nx_j, ny_j, nz_j)
+// and a plane equation:
+//
+//   nx_j · x  +  ny_j · y  +  nz_j · z  +  d_j  =  0
+//
+// The signed distance ("height") from P to face j is:
+//
+//   h_j  =  \hat{n}_j · P  +  d_j
+//
+// The ray hits the plane at parameter:
+//
+//   t_j  =  - h_j / (\hat{n}_j · U)
+//
+// A crossing is valid only when  \hat{n}_j · U < 0  (photon approaching
+// face from inside) and t_j > 0.  We return the face with the smallest
+// valid t_j.
+//
+// TriNorm layout (SoA for NEON efficiency):
+//   Norm[0..3]   = { nx_0, nx_1, nx_2, nx_3 }
+//   Norm[4..7]   = { ny_0, ny_1, ny_2, ny_3 }
+//   Norm[8..11]  = { nz_0, nz_1, nz_2, nz_3 }
+//   Norm[12..15] = { d_0,  d_1,  d_2,  d_3  }
+//
+// On ARM (TIMOS_NEON): two float64x2_t FMA pairs compute all 4 dot
+// products simultaneously; vgetq_lane_f64 avoids store-load latency.
 static inline void Intersect(double& MinPos, int& MinPos_Idx, double& MinCos,
                               double* Norm, TPhoton& p){
   MinPos=NO_INTERSECTION; MinPos_Idx=-1;
@@ -175,23 +214,85 @@ static inline void Intersect(double& MinPos, int& MinPos_Idx, double& MinCos,
 #endif
 }
 
-// ----------------------------------------------------------------- Scatter
+// -----------------------------------------------------------------
+// Henyey-Greenstein scattering
+// -----------------------------------------------------------------
+//
+// The Henyey-Greenstein phase function (HG) for anisotropy factor g in [0,1):
+//
+//   p(\cos\theta)  =  \frac{1 - g^2}
+//                          {4\pi [1 + g^2 - 2g\cos\theta]^{3/2}}
+//
+// Sampling the deflection angle \theta via inversion (Wang et al. 1995):
+//
+//   \cos\theta  =  \frac{1}{2g}
+//                  \left[ 1 + g^2 - \left(\frac{1-g^2}{1-g+2g\xi}\right)^2 \right]
+//
+// where \xi ~ Uniform(0,1).  For g=0 (isotropic) the formula reduces to
+//   \cos\theta = 2\xi - 1.
+//
+// The azimuth \phi ~ Uniform(0, 2\pi) is sampled directly.
+//
+// Rotating the direction (ux,uy,uz) by (\theta,\phi):
+//   If |uz| \approx 1 (photon nearly along z-axis) use the simple form:
+//     U' = (\sin\theta\cos\phi,  \sin\theta\sin\phi,  \pm\cos\theta)
+//   Otherwise apply the general rotation (MCML, Prahl et al. 1989):
+//     U'_x = \frac{\sin\theta}{\sqrt{1-uz^2}}
+//             (ux\cdot uz\cdot\cos\phi - uy\cdot\sin\phi) + ux\cos\theta
+//     U'_y = \frac{\sin\theta}{\sqrt{1-uz^2}}
+//             (uy\cdot uz\cdot\cos\phi + ux\cdot\sin\phi) + uy\cos\theta
+//     U'_z = -\sin\theta\cos\phi\sqrt{1-uz^2} + uz\cos\theta
 static inline void Scatter(TPhoton& p, double g, timos::RngPool& rng){
-  if(g>=1.0) return;
+  if(g>=1.0) return;   // g == 1: pure forward scattering / glass — no deflection
   double u=rng.get_uniform(), cost;
-  if(g==0.0) cost=u*2.0-1.0;
+  if(g==0.0) cost=u*2.0-1.0;   // isotropic: \cos\theta = 2\xi - 1
   else{ double tmp=(1.0-g*g)/(1.0-g+2.0*g*u); cost=(1.0+g*g-tmp*tmp)/(2.0*g); }
   double sinp,cosp; rng.get_sincos(sinp,cosp);
   double ux=p.UX,uy=p.UY,uz=p.UZ, sint=sqrt(1.0-cost*cost);
   if(fabs(uz)<=G_COS_0_D){
+    // General rotation formula (photon not along z-axis)
     double t1=sqrt(1.0-uz*uz),t=sint/t1,t2=uz*cosp;
     p.UX=(ux*t2-uy*sinp)*t+ux*cost; p.UY=(uy*t2+ux*sinp)*t+uy*cost; p.UZ=-sint*cosp*t1+uz*cost;
-  }else{ p.UX=sint*cosp; p.UY=sint*sinp; p.UZ=(uz>0)?cost:-cost; }
+  }else{
+    // Degenerate case: uz \approx \pm 1, use simplified expression
+    p.UX=sint*cosp; p.UY=sint*sinp; p.UZ=(uz>0)?cost:-cost;
+  }
 }
 
-// ----------------------------------------------------------------- Propagate one photon lifetime
-// Returns false if the photon should be abandoned (time-domain window exceeded).
-// Returns true  when the photon has exited the domain or been killed by roulette.
+// -----------------------------------------------------------------
+// Propagate one complete photon lifetime
+// -----------------------------------------------------------------
+//
+// The simulation follows a photon through the mesh using the method of
+// Wang, Jacques & Zheng (1995, Comp. Meth. Prog. Biomed. 47, 131-146).
+//
+// Step-size sampling (Beer-Lambert):
+//   The free-path length s between scattering/absorption events obeys
+//   an exponential distribution with rate \mu_t = \mu_a + \mu_s:
+//
+//     s = -\ln(\xi) / \mu_t     \xi ~ Uniform(0,1)
+//
+//   Since \xi is uniform, -\ln(\xi) ~ Exponential(1), so
+//   the RNG pool provides pre-computed values of -\ln(\xi) via vvlog.
+//
+// Weight reduction (implicit absorption, MCML):
+//   Rather than terminating at each absorption event, the photon weight W
+//   is reduced by the absorbed fraction at each step:
+//
+//     \Delta W  =  (\mu_a / \mu_t) \cdot W
+//     W  \leftarrow  W - \Delta W
+//
+//   This is the "delta-tracking" / continuous absorption approach.
+//
+// Russian roulette (Haynsworth, 1956):
+//   When  W < W_threshold  the photon has negligible contribution.
+//   With probability p_survive = 0.1 it survives with boosted weight
+//   W \leftarrow W / p_survive; otherwise it is terminated.
+//   This preserves energy expectation:
+//     E[\Delta W] = p_survive \cdot (W / p_survive) = W.
+//
+// Returns PropResult::Abandon if the photon exceeds the time window;
+//         PropResult::Done    when the photon exits or is killed.
 enum class PropResult { Done, Abandon };
 
 static PropResult propagate_photon(TPhoton& p, TMedOptic* med,
@@ -202,6 +303,7 @@ static PropResult propagate_photon(TPhoton& p, TMedOptic* med,
                                    long long& nSteps, long long& nIsect){
   for(;;){ // outer step loop
     nSteps++;
+    // s = -ln(\xi) / \mu_t  (IMUAMUS = 1/\mu_t)
     p.Step = rng.get_neg_log() * med[p.Cur_Med].IMUAMUS;
 
     // Inner boundary-crossing loop (replaces goto Label_100)
@@ -368,9 +470,9 @@ void* ThreadPhotonPropagation(void* varg){
     // Fetch a batch of photons if the current batch is exhausted
     if(ThreadSrc.NumPhoton <= 0){
       int n = Fetch_Source(ThreadSrc, ctx, tid);
-      if(n == 0){ if(tid==0) cerr<<"\r100%\n"; break; }
+      if(n == 0){ if(tid==0) cout<<"\r100%\n"; break; }
       ctx.simedPhoton += n;
-      if(tid==0) cerr<<"\r"<<(int)(ctx.simedPhoton*100/ctx.totalPhoton)<<"%";
+      if(tid==0) cout<<"\r"<<(int)(ctx.simedPhoton*100/ctx.totalPhoton)<<"%";
     }
     ThreadSrc.NumPhoton--;
 

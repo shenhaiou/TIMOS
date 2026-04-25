@@ -13,7 +13,7 @@
 #include "output.h"
 
 int main(){
-  std::cerr << "--- test_integration ---\n";
+  std::cout << "--- test_integration ---\n";
 
   SimContext ctx;
 
@@ -50,13 +50,13 @@ int main(){
     totalAbs += ctx.absorption[i];
   double absorbedFraction = totalAbs / double(ctx.totalPhoton);
 
-  std::cerr << "Absorbed fraction: " << absorbedFraction
+  std::cout << "Absorbed fraction: " << absorbedFraction
             << "  (expected ~0.1795)\n";
 
   // Allow ±1% tolerance (Monte Carlo noise)
   assert(std::fabs(absorbedFraction - 0.1795) < 0.01
          && "absorbed fraction should be ~17.95% for mua005_mus05 one-layer");
 
-  std::cerr << "PASS test_integration\n";
+  std::cout << "PASS test_integration\n";
   return 0;
 }

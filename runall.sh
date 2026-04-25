@@ -11,4 +11,4 @@ time -p ./source/timos -f example/cube_5med/cube_5med.mesh -s example/cube_5med/
 time -p ./source/timos -f example/mouse/mouse.mesh -s example/mouse/mouse.source -p example/mouse/mouse.opt -m is -o example/mouse/result.dat -t 32
 
 time -p ./source/timos -f example/half_sphere/spherelens.mesh -s example/half_sphere/sphere.source -p example/half_sphere/freespace.opt -m is -o example/half_sphere/result_freespace.dat -T 0.0001 200 -t 32
-time -p ./source/timos -f example/half_sphere/spherelens.mesh -s example/half_sphere/sphere.source -p example/half_sphere/tissue.opt -m is -o example/half_sphere/result_tissue.dat -T -t.0001 200 -t 32
+time -p ./source/timos -f example/half_sphere/spherelens.mesh -s example/half_sphere/sphere.source -p example/half_sphere/tissue.opt -m is -o example/half_sphere/result_tissue.dat -T 0.0001 200 -t 32
