@@ -427,8 +427,10 @@ static inline PropResult propagate_photon(TPhoton& p, TMedOptic* med,
       if(r < ctx.gridRMax && y > 0 && y < ctx.gridYMax){
         int r_idx = (int)(r * ctx.invGridDR);
         int y_idx = (int)(y * ctx.invGridDY);
-        if(ctx.timeDomain) localGrid[r_idx][y_idx][TT] += temp;
-        else               localGrid[r_idx][y_idx][0]  += temp;
+        double mua = med[p.Cur_Med].mua;
+        double weight_norm = (mua > 1e-12) ? (temp / mua) : (p.Weight / med[p.Cur_Med].MUAMUS);
+        if(ctx.timeDomain) localGrid[r_idx][y_idx][TT] += weight_norm;
+        else               localGrid[r_idx][y_idx][0]  += weight_norm;
       }
     }
 

@@ -193,10 +193,8 @@ TiResult WriteGridASCII(const std::string& out_f, SimContext& ctx){
       line.clear();
       std::format_to(std::back_inserter(line), "{} {} ", r, y);
       for(int t=0; t<nt; t++){
-        // Convert absorbed energy to fluence: E / (mua * Vol)
-        // Note: For simplicity, we assume the grid is mostly in one medium (tissue)
-        // If it spans media, we'd need to track mua per grid cell. 
-        // For the half-sphere lens study, the tissue is the primary interest.
+        // Cylindrical Grid data now stores Fluence Weight (E / mua).
+        // We only need to divide by the ring volume to get actual Fluence.
         double val = ctx.cylindricalGrid[r][y][t] / ring_vol;
         fast_append_double(line, val);
       }
