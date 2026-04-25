@@ -38,9 +38,9 @@ struct SimContext {
   int internalResultFormat = 0;
 
   // ------- High-Resolution Cylindrical Grid (Symmetry Mode) -------
-  bool   useGrid        = false;
-  double gridRMax       = 0.0;
-  double gridYMax       = 0.0;
+  bool   useGrid        = false;  // Enable symmetry-folded grid
+  double gridRMax       = 0.0;    // Max radius for cylindrical grid (mm)
+  double gridYMax       = 0.0;    // Max depth for cylindrical grid (mm)
   int    gridNr         = 100;
   int    gridNy         = 100;
   double invGridDR      = 0.0;

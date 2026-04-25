@@ -224,10 +224,12 @@ int main(int argc, char* argv[]){
     ctx.timeAbsorption.assign(ctx.numElem+1,         vector<double>(ctx.numTimeStep,0.0));
   }
 
+  // Initialize High-Resolution Cylindrical Grid (for radially symmetric phantoms)
   if(ctx.useGrid){
     ctx.invGridDR = ctx.gridNr / ctx.gridRMax;
     ctx.invGridDY = ctx.gridNy / ctx.gridYMax;
     int nt = ctx.timeDomain ? ctx.numTimeStep : 1;
+    // Allocate 3D grid: Nr x Ny x Nt
     ctx.cylindricalGrid.assign(ctx.gridNr, std::vector<std::vector<double>>(ctx.gridNy, std::vector<double>(nt, 0.0)));
     cout << "Cylindrical grid enabled: " << ctx.gridNr << "x" << ctx.gridNy << "x" << nt << "\n";
   }

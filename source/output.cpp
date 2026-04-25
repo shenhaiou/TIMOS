@@ -185,6 +185,7 @@ TiResult WriteGridASCII(const std::string& out_f, SimContext& ctx){
   std::string line;
   line.reserve(1024);
   for(int r=0; r<ctx.gridNr; r++){
+    // Calculate volume of the cylindrical ring at radius r
     double r_in = r * dr;
     double r_out = (r + 1) * dr;
     double ring_vol = PI * (r_out * r_out - r_in * r_in) * dy;
@@ -193,8 +194,8 @@ TiResult WriteGridASCII(const std::string& out_f, SimContext& ctx){
       line.clear();
       std::format_to(std::back_inserter(line), "{} {} ", r, y);
       for(int t=0; t<nt; t++){
-        // Cylindrical Grid data now stores Fluence Weight (E / mua).
-        // We only need to divide by the ring volume to get actual Fluence.
+        // Cylindrical Grid data already stores Fluence Weight (E / mua).
+        // Complete the fluence calculation by dividing by ring volume.
         double val = ctx.cylindricalGrid[r][y][t] / ring_vol;
         fast_append_double(line, val);
       }

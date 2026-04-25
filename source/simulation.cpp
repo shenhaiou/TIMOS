@@ -420,7 +420,7 @@ static inline PropResult propagate_photon(TPhoton& p, TMedOptic* med,
       LocalAbs[p.Cur_Elem] += temp;
     }
 
-    // Cylindrical grid recording (Symmetry)
+    // Cylindrical grid recording (Radial Symmetry folding)
     if(ctx.useGrid){
       double r = sqrt(p.X*p.X + p.Z*p.Z);
       double y = p.Y;
@@ -428,6 +428,9 @@ static inline PropResult propagate_photon(TPhoton& p, TMedOptic* med,
         int r_idx = (int)(r * ctx.invGridDR);
         int y_idx = (int)(y * ctx.invGridDY);
         double mua = med[p.Cur_Med].mua;
+        // Normalize energy weight to Fluence: Weight / (mua * Vol).
+        // mua normalization is done here to handle media transitions correctly.
+        // Volume normalization is done during output (post-simulation).
         double weight_norm = (mua > 1e-12) ? (temp / mua) : (p.Weight / med[p.Cur_Med].MUAMUS);
         if(ctx.timeDomain) localGrid[r_idx][y_idx][TT] += weight_norm;
         else               localGrid[r_idx][y_idx][0]  += weight_norm;

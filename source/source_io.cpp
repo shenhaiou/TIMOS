@@ -57,10 +57,12 @@ TiResult Prepare_Source(SimContext& ctx){
 
   double h[4];
   for(int i = 0; i < ctx.numSource; i++){
+    // For Point (1) and Pencil Beam (11) sources, we find the containing element automatically.
     if(ctx.sources[i].SourceType == 1 || ctx.sources[i].SourceType == 11){
       ctx.sources[i].ElemIdx = -1;
       for(int e = 1; e <= ctx.numElem; e++){
         double minH = NO_INTERSECTION;
+        // Check if point is inside tetrahedron 'e' using face heights (signed distances)
         h[0]=ctx.elems[e].TriNorm[0]*ctx.sources[i].Position.X
             +ctx.elems[e].TriNorm[4]*ctx.sources[i].Position.Y
             +ctx.elems[e].TriNorm[8]*ctx.sources[i].Position.Z+ctx.elems[e].TriNorm[12];
@@ -83,24 +85,25 @@ TiResult Prepare_Source(SimContext& ctx){
         if(h[3]<minH) minH=h[3];
 
         // For pencil beam (Type 11), if we are on a boundary (minH approx 0),
-        // we should ensure the beam is pointing INTO the element.
+        // we must ensure the beam is pointing INTO the element.
         if(ctx.sources[i].SourceType == 11 && minH < 1e-7){
           bool pointingIn = true;
           for(int j=0; j<4; j++){
             double hj = ctx.elems[e].TriNorm[j]*ctx.sources[i].Position.X
                       + ctx.elems[e].TriNorm[j+4]*ctx.sources[i].Position.Y
                       + ctx.elems[e].TriNorm[j+8]*ctx.sources[i].Position.Z + ctx.elems[e].TriNorm[j+12];
-            if(hj < 1e-7){ // Point is on or very close to this face
+            if(hj < 1e-7){ // Point is on this specific face
               double dot = ctx.elems[e].TriNorm[j]*ctx.sources[i].IncAngle.X
                          + ctx.elems[e].TriNorm[j+4]*ctx.sources[i].IncAngle.Y
                          + ctx.elems[e].TriNorm[j+8]*ctx.sources[i].IncAngle.Z;
-              if(dot < -1e-9){ pointingIn = false; break; } // Pointing out
+              if(dot < -1e-9){ pointingIn = false; break; } // Pointing out of this face
             }
           }
           if(!pointingIn) continue;
         }
 
         ctx.sources[i].ElemIdx = e;
+        // If very close to boundary, nudge towards centroid for numerical stability
         if(minH < 1e-6){
           if(ctx.sources[i].SourceType == 1)
             cout<<"\tSource "<<i+1<<" too close to boundary of element "<<e<<"; nudging.\n";
