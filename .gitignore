@@ -14,3 +14,4 @@ example/**/result*.dat
 
 # Claude internal
 .claude/
+venv/

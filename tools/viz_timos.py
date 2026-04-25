@@ -5,6 +5,7 @@ import argparse
 import os
 
 def parse_mesh(mesh_path):
+    print(f"Reading mesh: {mesh_path}")
     with open(mesh_path, 'r') as f:
         lines = [line.strip() for line in f if line.strip() and not line.strip().startswith('#')]
     num_nodes, num_elems = int(lines[0]), int(lines[1])
@@ -16,8 +17,11 @@ def parse_mesh(mesh_path):
     return pv.UnstructuredGrid(np.hstack(cells), [pv.CellType.TETRA]*num_elems, nodes)
 
 def parse_grid(grid_path):
+    print(f"Reading grid data: {grid_path}")
     with open(grid_path, 'r') as f:
         lines = f.readlines()
+    nr, ny, nt = 0, 0, 0
+    start_idx = -1
     for i, line in enumerate(lines):
         if line.startswith('3 '):
             parts = line.split()
@@ -31,28 +35,35 @@ def parse_grid(grid_path):
     return data, nr, ny, nt
 
 def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--mesh", required=True)
-    parser.add_argument("--data", required=True)
-    parser.add_argument("--grid")
-    parser.add_argument("--output")
-    parser.add_argument("--log", action="store_true")
-    parser.add_argument("--animate", action="store_true")
-    parser.add_argument("--smooth", type=float, default=0.0)
-    parser.add_argument("--vmin", type=float)
-    parser.add_argument("--vmax", type=float)
-    parser.add_argument("--drange", type=float, help="Dynamic range in log units (e.g. 4.0)")
-    parser.add_argument("--max-steps", type=int)
-    parser.add_argument("--preview-frame", type=int, help="Frame to show in static/interactive preview")
-    parser.add_argument("--interactive", action="store_true", help="Tune color scale manually")
+    parser = argparse.ArgumentParser(description="TIM-OS Visualization Tool v3.0")
+    parser.add_argument("--mesh", required=True, help="Path to .mesh file")
+    parser.add_argument("--data", required=True, help="Path to .dat result file")
+    parser.add_argument("--grid", help="Path to .grid result file")
+    parser.add_argument("--output", help="Output filename (.mp4 or .png)")
+    parser.add_argument("--log", action="store_true", help="Logarithmic scale")
+    parser.add_argument("--animate", action="store_true", help="Generate MP4 animation")
+    parser.add_argument("--smooth", type=float, default=1.0, help="Gaussian smoothing sigma")
+    parser.add_argument("--vmin", type=float, help="Manual min value (log if --log)")
+    parser.add_argument("--vmax", type=float, help="Manual max value (log if --log)")
+    parser.add_argument("--max-steps", type=int, help="Limit animation frames")
+    parser.add_argument("--interactive", action="store_true", help="Open visual tuner with sliders")
     args = parser.parse_args()
 
+    # Load Grid Data
+    if not args.grid:
+        print("Error: Grid file required for high-res visualization.")
+        return
+    
     data, nr, ny, nt = parse_grid(args.grid)
     if args.max_steps and args.max_steps < nt: nt = args.max_steps
+    
+    # Smooth Data
     if args.smooth > 0:
         from scipy.ndimage import gaussian_filter
+        print(f"Smoothing data (sigma={args.smooth})...")
         for t in range(nt): data[:, :, t] = gaussian_filter(data[:, :, t], sigma=args.smooth)
 
+    # Parse Dimensions
     rmax, ymax = 3.0, 5.0
     with open(args.grid, 'r') as f:
         for l in f.readlines()[:10]:
@@ -62,6 +73,7 @@ def main():
                     if "Rmax=" in p: rmax = float(p.split('=')[1])
                     if "Ymax=" in p: ymax = float(p.split('=')[1])
 
+    # Setup Mesh
     mesh = pv.ImageData(dimensions=(2*nr, ny, 1), spacing=(rmax/nr, ymax/ny, 1))
     mesh.origin = (-rmax, 0, 0)
     
@@ -70,56 +82,76 @@ def main():
         d[:nr, :] = np.flipud(data[:, :, t]); d[nr:, :] = data[:, :, t]
         return np.log10(d.T + 1e-18) if args.log else d.T
 
-    # Find global max
+    # Defaults
     actual_max = -1e20
     for t in range(nt):
         m = np.nanmax(get_step_data(t))
         if m > actual_max: actual_max = m
     
     v_max = args.vmax if args.vmax is not None else actual_max
-    v_min = args.vmin if args.vmin is not None else (v_max - (args.drange if args.drange else 4.0))
+    v_min = args.vmin if args.vmin is not None else (v_max - 3.0)
+    current_frame = nt // 4
 
     if args.interactive:
-        print(f"\n--- Interactive Color Tuning ---")
-        print(f"Data Peak: {actual_max:.2f}")
-        while True:
-            print(f"Current Range: {v_min:.2f} to {v_max:.2f}")
-            plotter = pv.Plotter(title="TIM-OS Tuning Preview (Close to accept)")
-            preview_idx = args.preview_frame if args.preview_frame is not None else nt // 4
-            mesh.point_data["Fluence"] = get_step_data(preview_idx).flatten()
-            plotter.add_mesh(mesh, scalars="Fluence", cmap="jet", clim=[v_min, v_max])
-            plotter.view_xy()
-            plotter.show()
-            
-            resp = input("Accept range? (y/n) or enter new 'vmin vmax' or 'drange': ")
-            if resp.lower() == 'y' or resp == '': break
-            try:
-                parts = resp.split()
-                if len(parts) == 1:
-                    args.drange = float(parts[0])
-                    v_min = v_max - args.drange
-                else:
-                    v_min, v_max = float(parts[0]), float(parts[1])
-            except:
-                print("Invalid input. Try again.")
+        print("\n--- Visual Tuner Instructions ---")
+        print("1. Use sliders to adjust Frame, VMin, and VMax.")
+        print("2. Close the window to accept values and proceed.")
+        
+        plotter = pv.Plotter(title="TIM-OS Visual Tuner")
+        mesh.point_data["Fluence"] = get_step_data(current_frame).flatten()
+        actor = plotter.add_mesh(mesh, scalars="Fluence", cmap="jet", clim=[v_min, v_max])
+        plotter.view_xy()
 
-    print(f"Final Range: {v_min} to {v_max}")
+        def update_frame(val):
+            nonlocal current_frame
+            current_frame = int(val)
+            mesh.point_data["Fluence"] = get_step_data(current_frame).flatten()
 
-    plotter = pv.Plotter(off_screen=True if args.output else False)
-    # Use preview_frame for static image if provided
-    d0 = get_step_data(args.preview_frame if args.preview_frame is not None else 0)
-    mesh.point_data["Fluence"] = d0.flatten()
-    actor = plotter.add_mesh(mesh, scalars="Fluence", cmap="jet", clim=[v_min, v_max])
-    plotter.view_xy()
-    
+        def update_vmin(val):
+            nonlocal v_min
+            v_min = val
+            actor.mapper.scalar_range = (v_min, v_max)
+
+        def update_vmax(val):
+            nonlocal v_max
+            v_max = val
+            actor.mapper.scalar_range = (v_min, v_max)
+
+        plotter.add_slider_widget(update_frame, [0, nt-1], value=current_frame, title="Frame", pointa=(0.05, 0.1), pointb=(0.35, 0.1))
+        plotter.add_slider_widget(update_vmin, [v_min-5, v_max], value=v_min, title="VMin", pointa=(0.4, 0.1), pointb=(0.65, 0.1))
+        plotter.add_slider_widget(update_vmax, [v_min, v_max+2], value=v_max, title="VMax", pointa=(0.7, 0.1), pointb=(0.95, 0.1))
+        
+        plotter.show()
+        print(f"Accepted Range: {v_min:.2f} to {v_max:.2f} at frame {current_frame}")
+
+    # Final Action
     if args.animate and nt > 1:
+        plotter = pv.Plotter(off_screen=True if args.output else False)
+        mesh.point_data["Fluence"] = get_step_data(0).flatten()
+        actor = plotter.add_mesh(mesh, scalars="Fluence", cmap="jet", clim=[v_min, v_max])
+        plotter.view_xy()
+        
         video_path = args.output if args.output else "animation.mp4"
         plotter.open_movie(video_path)
+        print(f"Generating animation to {video_path}...")
         for i in range(nt):
             mesh.point_data["Fluence"] = get_step_data(i).flatten()
             plotter.write_frame()
         plotter.close()
-    elif args.output: plotter.screenshot(args.output)
-    else: plotter.show()
+        print("Done.")
+    elif args.output:
+        plotter = pv.Plotter(off_screen=True)
+        mesh.point_data["Fluence"] = get_step_data(current_frame).flatten()
+        plotter.add_mesh(mesh, scalars="Fluence", cmap="jet", clim=[v_min, v_max])
+        plotter.view_xy()
+        plotter.screenshot(args.output)
+        print(f"Saved screenshot to {args.output}")
+    else:
+        plotter = pv.Plotter()
+        mesh.point_data["Fluence"] = get_step_data(current_frame).flatten()
+        plotter.add_mesh(mesh, scalars="Fluence", cmap="jet", clim=[v_min, v_max])
+        plotter.view_xy()
+        plotter.show()
 
-if __name__ == "__main__": main()
+if __name__ == "__main__":
+    main()
