@@ -69,11 +69,12 @@ static bool parse_argu(int argc, char* argv[],
     {"rand-start", required_argument, nullptr, 'r'},
     {"time-step",  required_argument, nullptr, 'T'},
     {"num-steps",  required_argument, nullptr, 'N'},
+    {"grid",       required_argument, nullptr, 'g'},
     {"help",       no_argument,       nullptr, 'h'},
     {nullptr,      0,                 nullptr,  0 }
   };
   // clang-format on
-  static const char* short_opts = "p:f:s:m:o:t:r:T:N:h";
+  static const char* short_opts = "p:f:s:m:o:t:r:T:N:g:h";
 
   bool hasOpt=false, hasFem=false, hasSrc=false, hasOut=false;
   bool hasFmt=false, hasTh=false,  hasRd=false;
@@ -81,6 +82,15 @@ static bool parse_argu(int argc, char* argv[],
   int c;
   while((c = getopt_long(argc, argv, short_opts, long_opts, nullptr)) != -1){
     switch(c){
+    case 'g':
+      ctx.useGrid = true;
+      try {
+        ctx.gridRMax = std::stod(optarg);
+        if(optind < argc && argv[optind][0] != '-') ctx.gridYMax = std::stod(argv[optind++]);
+        if(optind < argc && argv[optind][0] != '-') ctx.gridNr   = std::stoi(argv[optind++]);
+        if(optind < argc && argv[optind][0] != '-') ctx.gridNy   = std::stoi(argv[optind++]);
+      } catch (...) { cout << "Invalid grid parameters. Use: -g Rmax Ymax Nr Ny\n"; return false; }
+      break;
     case 'p':
       opt_f = optarg; if(!check_file(opt_f)) return false; hasOpt=true; break;
     case 'f':
@@ -214,6 +224,14 @@ int main(int argc, char* argv[]){
     ctx.timeAbsorption.assign(ctx.numElem+1,         vector<double>(ctx.numTimeStep,0.0));
   }
 
+  if(ctx.useGrid){
+    ctx.invGridDR = ctx.gridNr / ctx.gridRMax;
+    ctx.invGridDY = ctx.gridNy / ctx.gridYMax;
+    int nt = ctx.timeDomain ? ctx.numTimeStep : 1;
+    ctx.cylindricalGrid.assign(ctx.gridNr, std::vector<std::vector<double>>(ctx.gridNy, std::vector<double>(nt, 0.0)));
+    cout << "Cylindrical grid enabled: " << ctx.gridNr << "x" << ctx.gridNy << "x" << nt << "\n";
+  }
+
   ctx.numIntersections=0; ctx.numSteps=0; ctx.simedPhoton=0;
 
   // Launch threads via std::jthread — auto-joins on scope exit
@@ -245,6 +263,10 @@ int main(int argc, char* argv[]){
       ? TimeWriteResultASCII(opt_f,fem_f,src_f,out_f,ctx,sufTh,intTh,fmt)
       :      WriteResultASCII(opt_f,fem_f,src_f,out_f,ctx,sufTh,intTh,fmt);
     if(!wr){ cout<<"Write failed: "<<wr.error()<<"\n"; return -1; }
+    if(ctx.useGrid){
+        TiResult gr = WriteGridASCII(out_f, ctx);
+        if(!gr){ cout<<"Grid write failed: "<<gr.error()<<"\n"; return -1; }
+    }
     cout<<"End write output file (" << wall_time()-wt0 << " sec).\n";
   }else{
     cout<<"Benchmark mode: Skipping output file write.\n";

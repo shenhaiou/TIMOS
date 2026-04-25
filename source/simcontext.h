@@ -37,6 +37,17 @@ struct SimContext {
   // ------- Result format (future use) -------
   int internalResultFormat = 0;
 
+  // ------- High-Resolution Cylindrical Grid (Symmetry Mode) -------
+  bool   useGrid        = false;
+  double gridRMax       = 0.0;
+  double gridYMax       = 0.0;
+  int    gridNr         = 100;
+  int    gridNy         = 100;
+  double invGridDR      = 0.0;
+  double invGridDY      = 0.0;
+  // grid[r_idx][y_idx][t_idx]
+  std::vector<std::vector<std::vector<double>>> cylindricalGrid;
+
   // ------- Optics -------
   double                envRefIdx = 1.0;
   int                   numMed    = 0;

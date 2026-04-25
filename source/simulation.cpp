@@ -293,9 +293,10 @@ static inline void Scatter(TPhoton& p, double g, timos::RngPool& rng){
 //         PropResult::Done    when the photon exits or is killed.
 enum class PropResult { Done, Abandon };
 
-static PropResult propagate_photon(TPhoton& p, TMedOptic* med,
+static inline PropResult propagate_photon(TPhoton& p, TMedOptic* med,
                                    SimContext& ctx,
                                    double* LocalAbs, double* LocalSurf,
+                                   std::vector<std::vector<std::vector<double>>>& localGrid,
                                    TPhotonInfo* PInfo, int& PIdx,
                                    timos::RngPool& rng,
                                    long long& nSteps, long long& nIsect){
@@ -406,16 +407,29 @@ static PropResult propagate_photon(TPhoton& p, TMedOptic* med,
 
     // Absorption recording
     double temp = med[p.Cur_Med].pdwa * p.Weight;
+    int TT = 0;
     if(ctx.timeDomain){
-      int TT = (unsigned)floor(p.Path * ctx.invLightSpeedMutTimeStep);
+      TT = (unsigned)floor(p.Path * ctx.invLightSpeedMutTimeStep);
       if(TT >= ctx.numTimeStep) return PropResult::Abandon;
-      TT = (TT<<1);
+      int t_idx = (TT<<1);
       int Ci = p.Cur_Elem;
-      if(Ci==PInfo[PIdx].Idx && TT==PInfo[PIdx].Time_Type) PInfo[PIdx].LostWeight+=temp;
-      else{ PIdx++; PInfo[PIdx]={TT,Ci,temp}; }
+      if(Ci==PInfo[PIdx].Idx && t_idx==PInfo[PIdx].Time_Type) PInfo[PIdx].LostWeight+=temp;
+      else{ PIdx++; PInfo[PIdx]={t_idx,Ci,temp}; }
       if(PIdx >= TD_FLUSH_SIZE) SaveLocal2Global(PInfo, PIdx, ctx);
     }else{
       LocalAbs[p.Cur_Elem] += temp;
+    }
+
+    // Cylindrical grid recording (Symmetry)
+    if(ctx.useGrid){
+      double r = sqrt(p.X*p.X + p.Z*p.Z);
+      double y = p.Y;
+      if(r < ctx.gridRMax && y > 0 && y < ctx.gridYMax){
+        int r_idx = (int)(r * ctx.invGridDR);
+        int y_idx = (int)(y * ctx.invGridDY);
+        if(ctx.timeDomain) localGrid[r_idx][y_idx][TT] += temp;
+        else               localGrid[r_idx][y_idx][0]  += temp;
+      }
     }
 
 #ifdef NOPUREGLASS
@@ -442,6 +456,11 @@ void* ThreadPhotonPropagation(void* varg){
 
   std::vector<double> LocalAbs(ctx.numElem+1, 0.0);
   std::vector<double> LocalSurf(ctx.numBoundaryTrig+1, 0.0);
+  std::vector<std::vector<std::vector<double>>> localGrid;
+  if(ctx.useGrid){
+    int nt = ctx.timeDomain ? ctx.numTimeStep : 1;
+    localGrid.assign(ctx.gridNr, std::vector<std::vector<double>>(ctx.gridNy, std::vector<double>(nt, 0.0)));
+  }
 
   std::vector<TPhotonInfo> PInfo;
   if(ctx.timeDomain){
@@ -486,7 +505,7 @@ void* ThreadPhotonPropagation(void* varg){
     }
 
     // Propagate until photon exits, is killed, or exceeds time window
-    propagate_photon(p, med.data(), ctx, LocalAbs.data(), LocalSurf.data(), PInfo.data(), PIdx, rng, nSteps, nIsect);
+    propagate_photon(p, med.data(), ctx, LocalAbs.data(), LocalSurf.data(), localGrid, PInfo.data(), PIdx, rng, nSteps, nIsect);
     // PropResult::Abandon and PropResult::Done are both "start next photon"
   }
 
@@ -497,6 +516,16 @@ void* ThreadPhotonPropagation(void* varg){
     os_unfair_lock_lock(&Result_Lock);
     for(int i=1; i<=ctx.numElem;         i++) ctx.absorption[i] += LocalAbs[i];
     for(int i=1; i<=ctx.numBoundaryTrig; i++) ctx.surfMeas[i]   += LocalSurf[i];
+    os_unfair_lock_unlock(&Result_Lock);
+  }
+
+  if(ctx.useGrid){
+    os_unfair_lock_lock(&Result_Lock);
+    int nt = ctx.timeDomain ? ctx.numTimeStep : 1;
+    for(int r=0; r<ctx.gridNr; r++)
+      for(int y=0; y<ctx.gridNy; y++)
+        for(int t=0; t<nt; t++)
+          ctx.cylindricalGrid[r][y][t] += localGrid[r][y][t];
     os_unfair_lock_unlock(&Result_Lock);
   }
   ctx.numIntersections += nIsect;

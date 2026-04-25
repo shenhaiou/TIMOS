@@ -20,3 +20,5 @@ TiResult TimeWriteResultASCII(const std::string& opt_f, const std::string& fem_f
                                SimContext& ctx,
                                double sufThreshhold, double intThreshhold,
                                int output_format);
+
+TiResult WriteGridASCII(const std::string& out_f, SimContext& ctx);

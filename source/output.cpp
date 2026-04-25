@@ -168,4 +168,30 @@ TiResult TimeWriteResultASCII(const std::string& opt_f,const std::string& fem_f,
   return {};
 }
 
+TiResult WriteGridASCII(const std::string& out_f, SimContext& ctx){
+  std::string grid_out = out_f + ".grid";
+  ofstream fout(grid_out);
+  if(!fout.good()) return std::unexpected("cannot open grid output file");
+
+  int nt = ctx.timeDomain ? ctx.numTimeStep : 1;
+  fout << "% Cylindrical Grid: Nr=" << ctx.gridNr << " Ny=" << ctx.gridNy << " Nt=" << nt << "\n";
+  fout << "% Rmax=" << ctx.gridRMax << " Ymax=" << ctx.gridYMax << "\n";
+  fout << "3 " << ctx.gridNr << " " << ctx.gridNy << " " << nt << "\n";
+
+  std::string line;
+  line.reserve(1024);
+  for(int r=0; r<ctx.gridNr; r++){
+    for(int y=0; y<ctx.gridNy; y++){
+      line.clear();
+      std::format_to(std::back_inserter(line), "{} {} ", r, y);
+      for(int t=0; t<nt; t++){
+        fast_append_double(line, ctx.cylindricalGrid[r][y][t]);
+      }
+      line += '\n';
+      fout << line;
+    }
+  }
+  return {};
+}
+
 
