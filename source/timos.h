@@ -1,9 +1,12 @@
-//-------------------------------------------------
-// Copyright: 
+//----------------------------------------------------
+// Original Development: 
+// Haiou Shen
 // Biomedical Imaging Division 
 // School of Biomedical Engineering and Sciences
-// Virginia Tech
-// 2009
+// Virginia Tech (2009)
+//
+// Current Maintainer & v3.0+ Modernization:
+// Haiou Shen (2026)
 //----------------------------------------------------
 
 // Main head file for TIMOS.
