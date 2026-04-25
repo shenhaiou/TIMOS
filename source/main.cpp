@@ -19,16 +19,16 @@ using namespace std;
 // --------------------------------------------------------------------- usage
 static void print_usage(){
   cout <<
-    "\nTIM-OS v3.0 — Tetrahedral-mesh Inhomogeneous Monte-Carlo Optical Simulator\n\n"
+    "\nTIM-OS v3.3 — Tetrahedral-mesh Inhomogeneous Monte-Carlo Optical Simulator\n\n"
     "Usage:\n"
-    "  timos -p OPT -f MESH -s SRC -m MODE -o OUT [options]\n\n"
+    "  timos -p OPT -f MESH -s SRC -m MODE [options]\n\n"
     "Required:\n"
     "  -p, --optical FILE    optical parameter file (.opt)\n"
     "  -f, --mesh    FILE    finite-element mesh file (.mesh)\n"
     "  -s, --source  FILE    light source definition (.source)\n"
-    "  -m, --mode    MODE    output mode: s=surface, i=internal, si=both\n"
-    "  -o, --output  FILE    output filename (.dat)\n\n"
+    "  -m, --mode    MODE    output mode: s=surface, i=internal, si=both\n\n"
     "Optional:\n"
+    "  -o, --output  FILE    output filename (.dat) [omit for benchmark mode]\n"
     "  -t, --threads N       number of threads (default: 1)\n"
     "  -r, --rand-start N    starting RNG stream index for distributed runs\n"
     "                        (default: 1; max streams = 1024)\n"
@@ -37,6 +37,7 @@ static void print_usage(){
     "  -h, --help            show this message\n\n"
     "Notes:\n"
     "  All lengths in mm; optical coefficients in mm^-1.\n"
+    "  Omitting -o enables Benchmark Mode (skips writing results to disk).\n"
     "  For distributed runs across machines use non-overlapping -r values,\n"
     "  e.g. machine 1: -r 1 -t 16 ; machine 2: -r 17 -t 16.\n\n";
 }
@@ -135,7 +136,7 @@ static bool parse_argu(int argc, char* argv[],
     }
   }
 
-  if(!hasOpt||!hasFem||!hasSrc||!hasOut){ print_usage(); return false; }
+  if(!hasOpt||!hasFem||!hasSrc){ print_usage(); return false; }
   if(!hasTh)  ctx.numThread    = 1;
   if(!hasFmt) fmt              = 1;
   if(!hasRd)  ctx.startRandIdx = 1;
@@ -237,13 +238,17 @@ int main(int argc, char* argv[]){
   if(ctx.timeDomain) TimeAbsorptionToFluence(ctx,sufTh,intTh);
   else               AbsorptionToFluence    (ctx,sufTh,intTh);
 
-  double wt0 = wall_time();
-  cout<<"Write output file\n";
-  TiResult wr = ctx.timeDomain
-    ? TimeWriteResultASCII(opt_f,fem_f,src_f,out_f,ctx,sufTh,intTh,fmt)
-    :      WriteResultASCII(opt_f,fem_f,src_f,out_f,ctx,sufTh,intTh,fmt);
-  if(!wr){ cout<<"Write failed: "<<wr.error()<<"\n"; return -1; }
-  cout<<"End write output file (" << wall_time()-wt0 << " sec).\n";
+  if(!out_f.empty()){
+    double wt0 = wall_time();
+    cout<<"Write output file\n";
+    TiResult wr = ctx.timeDomain
+      ? TimeWriteResultASCII(opt_f,fem_f,src_f,out_f,ctx,sufTh,intTh,fmt)
+      :      WriteResultASCII(opt_f,fem_f,src_f,out_f,ctx,sufTh,intTh,fmt);
+    if(!wr){ cout<<"Write failed: "<<wr.error()<<"\n"; return -1; }
+    cout<<"End write output file (" << wall_time()-wt0 << " sec).\n";
+  }else{
+    cout<<"Benchmark mode: Skipping output file write.\n";
+  }
 
   cout<<"Done\n------------------------------------------------\n";
   // ctx goes out of scope here; all std::vector members free automatically.
