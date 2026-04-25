@@ -41,12 +41,14 @@ def main():
     parser.add_argument("--smooth", type=float, default=0.0)
     parser.add_argument("--vmin", type=float)
     parser.add_argument("--vmax", type=float)
-    parser.add_argument("--max-steps", type=int, help="Limit animation to first N steps")
+    parser.add_argument("--drange", type=float, help="Dynamic range in log units (e.g. 4.0)")
+    parser.add_argument("--max-steps", type=int)
+    parser.add_argument("--preview-frame", type=int, help="Frame to show in static/interactive preview")
+    parser.add_argument("--interactive", action="store_true", help="Tune color scale manually")
     args = parser.parse_args()
 
     data, nr, ny, nt = parse_grid(args.grid)
     if args.max_steps and args.max_steps < nt: nt = args.max_steps
-    
     if args.smooth > 0:
         from scipy.ndimage import gaussian_filter
         for t in range(nt): data[:, :, t] = gaussian_filter(data[:, :, t], sigma=args.smooth)
@@ -68,23 +70,46 @@ def main():
         d[:nr, :] = np.flipud(data[:, :, t]); d[nr:, :] = data[:, :, t]
         return np.log10(d.T + 1e-18) if args.log else d.T
 
-    # Determine Global Limits
-    if args.vmax is not None:
-        v_max = args.vmax
-    else:
-        v_max = -1e20
-        for t in range(nt):
-            m = np.nanmax(get_step_data(t))
-            if m > v_max: v_max = m
+    # Find global max
+    actual_max = -1e20
+    for t in range(nt):
+        m = np.nanmax(get_step_data(t))
+        if m > actual_max: actual_max = m
     
-    if args.vmin is not None: v_min = args.vmin
-    else: v_min = v_max - 4.0
+    v_max = args.vmax if args.vmax is not None else actual_max
+    v_min = args.vmin if args.vmin is not None else (v_max - (args.drange if args.drange else 4.0))
 
-    print(f"Using Range: {v_min} to {v_max}")
+    if args.interactive:
+        print(f"\n--- Interactive Color Tuning ---")
+        print(f"Data Peak: {actual_max:.2f}")
+        while True:
+            print(f"Current Range: {v_min:.2f} to {v_max:.2f}")
+            plotter = pv.Plotter(title="TIM-OS Tuning Preview (Close to accept)")
+            preview_idx = args.preview_frame if args.preview_frame is not None else nt // 4
+            mesh.point_data["Fluence"] = get_step_data(preview_idx).flatten()
+            plotter.add_mesh(mesh, scalars="Fluence", cmap="jet", clim=[v_min, v_max])
+            plotter.view_xy()
+            plotter.show()
+            
+            resp = input("Accept range? (y/n) or enter new 'vmin vmax' or 'drange': ")
+            if resp.lower() == 'y' or resp == '': break
+            try:
+                parts = resp.split()
+                if len(parts) == 1:
+                    args.drange = float(parts[0])
+                    v_min = v_max - args.drange
+                else:
+                    v_min, v_max = float(parts[0]), float(parts[1])
+            except:
+                print("Invalid input. Try again.")
+
+    print(f"Final Range: {v_min} to {v_max}")
 
     plotter = pv.Plotter(off_screen=True if args.output else False)
-    mesh.point_data["Fluence"] = get_step_data(0).flatten()
-    plotter.add_mesh(mesh, scalars="Fluence", cmap="jet", clim=[v_min, v_max])
+    # Use preview_frame for static image if provided
+    d0 = get_step_data(args.preview_frame if args.preview_frame is not None else 0)
+    mesh.point_data["Fluence"] = d0.flatten()
+    actor = plotter.add_mesh(mesh, scalars="Fluence", cmap="jet", clim=[v_min, v_max])
     plotter.view_xy()
     
     if args.animate and nt > 1:
